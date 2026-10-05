@@ -43,7 +43,7 @@ namespace MangaAuthorSorter
 
     internal sealed class LanguageManager
     {
-        private const int BuiltInLanguageVersion = 44;
+        private const int BuiltInLanguageVersion = 45;
 
         private readonly string _directory;
         private readonly Dictionary<string, string> _zh =
@@ -573,7 +573,7 @@ namespace MangaAuthorSorter
         {
             return new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                { "App.Title", "归归 V1.11.24" },
+                { "App.Title", "归归" },
                 { "App.Name", "归归" },
                 { "Common.Browse", "浏览..." },
                 { "Common.Save", "保存" },
@@ -750,6 +750,8 @@ namespace MangaAuthorSorter
                 { "Menu.CheckLanguagePacks", "检查语言包..." },
                 { "Menu.Help", "帮助(&H)" },
                 { "Menu.Readme", "使用说明" },
+                { "Menu.CheckUpdates", "检查更新" },
+                { "Menu.UpdateAvailable", "发现新版本 {0}" },
                 { "Menu.About", "关于" },
                 { "Menu.Support", "支持项目..." },
                 { "Dialog.ArchiveSettings.Title", "归档设置" },
@@ -1003,7 +1005,7 @@ namespace MangaAuthorSorter
                 { "Validation.SourceGone", "源文件已经不存在。" },
                 { "Validation.DuplicateFile", "同一文件夹中已经存在同名文件：{0}" },
                 { "About.Title", "关于归归" },
-                { "About.Body", "归归 / MangaAuthorSorter V1.11.24\r\n开发者：kendo" },
+                { "About.Body", "归归 / MangaAuthorSorter\r\n开发者：kendo" },
                 { "About.ProductName", "归归 / MangaAuthorSorter" },
                 { "About.Tagline", "漫画作者识别与归档工具" },
                 { "About.Author", "开发者：" },
@@ -1017,6 +1019,19 @@ namespace MangaAuthorSorter
                 { "About.Copied", "已复制" },
                 { "About.Developer", "开发者：" },
                 { "About.CheckUpdates", "检查更新" },
+                { "Update.Checking", "正在检查更新…" },
+                { "Update.AvailableTitle", "发现新版本" },
+                { "Update.VersionSummary", "当前版本：{0}    最新版本：{1}" },
+                { "Update.PublishedAt", "发布时间：" },
+                { "Update.NoNotes", "此版本没有提供更新说明。" },
+                { "Update.Download", "前往下载" },
+                { "Update.Later", "稍后" },
+                { "Update.UpToDate", "当前已是最新版本。\r\n当前版本：{0}" },
+                { "Update.NoRelease", "当前暂无可用的正式发布版本。" },
+                { "Update.Unavailable", "暂时无法检查更新，请稍后重试。" },
+                { "Update.Timeout", "检查更新超时，请稍后重试。" },
+                { "Update.InvalidVersion", "无法识别线上版本信息。" },
+                { "Update.OpenFailed", "无法打开下载页面，请稍后重试。" },
                 { "About.UpdateUnavailableTitle", "检查更新" },
                 { "About.UpdateUnavailableMessage", "当前版本尚未配置更新分发地址，检查与安装更新功能暂未启用。" },
                 { "About.FeedbackTitle", "社群反馈" },
@@ -1356,7 +1371,7 @@ namespace MangaAuthorSorter
         {
             return new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                { "App.Title", "MangaAuthorSorter V1.11.24" },
+                { "App.Title", "MangaAuthorSorter" },
                 { "App.Name", "MangaAuthorSorter" },
                 { "Common.Browse", "Browse..." },
                 { "Common.Save", "Save" },
@@ -1533,6 +1548,8 @@ namespace MangaAuthorSorter
                 { "Menu.CheckLanguagePacks", "Check language packs..." },
                 { "Menu.Help", "Help (&H)" },
                 { "Menu.Readme", "User guide" },
+                { "Menu.CheckUpdates", "Check for updates" },
+                { "Menu.UpdateAvailable", "New version {0} available" },
                 { "Menu.About", "About" },
                 { "Menu.Support", "Support project..." },
                 { "Dialog.ArchiveSettings.Title", "Archive settings" },
@@ -1786,7 +1803,7 @@ namespace MangaAuthorSorter
                 { "Validation.SourceGone", "The source file no longer exists." },
                 { "Validation.DuplicateFile", "A file with the same name already exists in this folder: {0}" },
                 { "About.Title", "About MangaAuthorSorter" },
-                { "About.Body", "GuiGui / MangaAuthorSorter V1.11.24\r\nDeveloper: kendo" },
+                { "About.Body", "GuiGui / MangaAuthorSorter\r\nDeveloper: kendo" },
                 { "About.ProductName", "GuiGui / MangaAuthorSorter" },
                 { "About.Tagline", "Manga author identification and sorting tool" },
                 { "About.Author", "Developer:" },
@@ -1800,6 +1817,19 @@ namespace MangaAuthorSorter
                 { "About.Copied", "Copied" },
                 { "About.Developer", "Developer:" },
                 { "About.CheckUpdates", "Check for updates" },
+                { "Update.Checking", "Checking for updates…" },
+                { "Update.AvailableTitle", "A new version is available" },
+                { "Update.VersionSummary", "Current version: {0}    Latest version: {1}" },
+                { "Update.PublishedAt", "Published:" },
+                { "Update.NoNotes", "No release notes were provided." },
+                { "Update.Download", "Go to download" },
+                { "Update.Later", "Later" },
+                { "Update.UpToDate", "You are using the latest version.\r\nCurrent version: {0}" },
+                { "Update.NoRelease", "No official release is currently available." },
+                { "Update.Unavailable", "Unable to check for updates right now. Please try again later." },
+                { "Update.Timeout", "The update check timed out. Please try again later." },
+                { "Update.InvalidVersion", "The online version information could not be recognized." },
+                { "Update.OpenFailed", "The download page could not be opened. Please try again later." },
                 { "About.UpdateUnavailableTitle", "Check for updates" },
                 { "About.UpdateUnavailableMessage", "Update distribution is not configured yet. Update checking and installation are not available in this build." },
                 { "About.FeedbackTitle", "Community & feedback" },

@@ -28,6 +28,8 @@
     <Compile Include="Program.cs" />
     <Compile Include="AppFiles.cs" />
     <Compile Include="Core\Models.cs" />
+    <Compile Include="Core\AppVersion.cs" />
+    <Compile Include="Core\UpdateCheckResult.cs" />
     <Compile Include="Core\AuthorRules.cs" />
     <Compile Include="Core\TagCleaningRules.cs" />
     <Compile Include="Core\ScanExclusionRules.cs" />
@@ -47,6 +49,7 @@
     <Compile Include="Services\LanguageManager.cs" />
     <Compile Include="Services\EverythingService.cs" />
     <Compile Include="Services\ScanWarmupService.cs" />
+    <Compile Include="Services\UpdateService.cs" />
     <Compile Include="Services\GermanLanguagePack.cs" />
     <Compile Include="Services\HistoryStore.cs" />
     <Compile Include="UI\FastDataGridView.cs" />
@@ -64,6 +67,7 @@
     <Compile Include="Forms\FileTypeProfileManagerForm.cs" />
     <Compile Include="Forms\LanguagePackCheckForm.cs" />
     <Compile Include="Forms\AboutForm.cs" />
+    <Compile Include="Forms\UpdateDialog.cs" />
     <Compile Include="Forms\LicenseForm.cs" />
     <Compile Include="Forms\SupportForm.cs" />
     <Compile Include="Forms\ExecutionConfirmDialog.cs" />

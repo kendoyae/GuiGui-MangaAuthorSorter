@@ -10,7 +10,7 @@ namespace MangaAuthorSorter
             Dictionary<string, string> d =
                 new Dictionary<string, string>(StringComparer.Ordinal);
 
-            d["App.Title"] = "MangaAuthorSorter V1.11.24";
+            d["App.Title"] = "MangaAuthorSorter";
             d["App.Name"] = "MangaAuthorSorter";
             d["Common.Browse"] = "Durchsuchen...";
             d["Common.Save"] = "Speichern";
@@ -136,6 +136,8 @@ namespace MangaAuthorSorter
             d["Menu.CheckLanguagePacks"] = "Sprachpakete prüfen...";
             d["Menu.Help"] = "Hilfe (&H)";
             d["Menu.Readme"] = "Anleitung";
+            d["Menu.CheckUpdates"] = "Nach Updates suchen";
+            d["Menu.UpdateAvailable"] = "Neue Version {0} verfügbar";
             d["Menu.About"] = "Info";
             d["Menu.Support"] = "Projekt unterstützen...";
             d["Dialog.ArchiveSettings.Title"] = "Ablage";
@@ -322,7 +324,7 @@ namespace MangaAuthorSorter
             d["Validation.SourceGone"] = "Quelldatei fehlt.";
             d["Validation.DuplicateFile"] = "Gleichnamige Datei im Ordner vorhanden: {0}";
             d["About.Title"] = "Über MangaAuthorSorter";
-            d["About.Body"] = "GuiGui / MangaAuthorSorter V1.11.24\r\nEntwickler: kendo";
+            d["About.Body"] = "GuiGui / MangaAuthorSorter\r\nEntwickler: kendo";
             d["About.ProductName"] = "GuiGui / MangaAuthorSorter";
             d["About.Tagline"] = "Manga-Autoren erkennen und sortieren";
             d["About.Author"] = "Entwickler:";
@@ -336,6 +338,19 @@ namespace MangaAuthorSorter
             d["About.Copied"] = "Kopiert";
             d["About.Developer"] = "Entwickler:";
             d["About.CheckUpdates"] = "Nach Updates suchen";
+            d["Update.Checking"] = "Updates werden gesucht…";
+            d["Update.AvailableTitle"] = "Neue Version verfügbar";
+            d["Update.VersionSummary"] = "Aktuelle Version: {0}    Neueste Version: {1}";
+            d["Update.PublishedAt"] = "Veröffentlicht:";
+            d["Update.NoNotes"] = "Für diese Version sind keine Hinweise verfügbar.";
+            d["Update.Download"] = "Zum Download";
+            d["Update.Later"] = "Später";
+            d["Update.UpToDate"] = "Sie verwenden bereits die neueste Version.\r\nAktuelle Version: {0}";
+            d["Update.NoRelease"] = "Derzeit ist keine offizielle Version verfügbar.";
+            d["Update.Unavailable"] = "Updates können momentan nicht geprüft werden. Bitte später erneut versuchen.";
+            d["Update.Timeout"] = "Die Updateprüfung hat zu lange gedauert. Bitte später erneut versuchen.";
+            d["Update.InvalidVersion"] = "Die Online-Versionsangabe konnte nicht erkannt werden.";
+            d["Update.OpenFailed"] = "Die Downloadseite konnte nicht geöffnet werden.";
             d["About.UpdateUnavailableTitle"] = "Updates";
             d["About.UpdateUnavailableMessage"] = "Noch keine Updatequelle konfiguriert. Prüfung und Installation sind in dieser Version nicht verfügbar.";
             d["About.FeedbackTitle"] = "Community & Feedback";

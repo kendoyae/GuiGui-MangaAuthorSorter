@@ -9,8 +9,7 @@ namespace MangaAuthorSorter
 {
     internal sealed class AboutForm : Form
     {
-        private const string GitHubUrl = "https://github.com/kendoyae/MangaAuthorSorter";
-        private const string GitHubFeedbackUrl = "https://github.com/kendoyae/MangaAuthorSorter/issues";
+        private const string GitHubFeedbackUrl = UpdateService.RepositoryUrl + "/issues";
         private const string QqGroup = "1103654612";
         private const string QqJoinLinkFileName = "QQ_GROUP_JOIN_URL.txt";
         private const string DefaultQqJoinUrl = "http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=fyelXxwKBK21nb7oyCsZBdtZN7ldEzRJ&authKey=N%2FrBIUpHX09uz9sJagQyCzDvRu4d1XAOELBkI5Plp6qCWN7c0rdp496yhMBH3yV1&noverify=0&group_code=1103654612";
@@ -20,7 +19,7 @@ namespace MangaAuthorSorter
         private readonly Label _feedbackLabel;
         private readonly Label _updateLabel;
 
-        public AboutForm(LanguageManager language, Font appFont, string appDir)
+        public AboutForm(LanguageManager language, Font appFont, string appDir, Action checkUpdates)
         {
             _language = language;
             _appDir = appDir ?? "";
@@ -89,7 +88,7 @@ namespace MangaAuthorSorter
             header.Controls.Add(developer);
 
             Label version = new Label();
-            version.Text = language.Get("About.Version") + " V1.11.24";
+            version.Text = language.Get("About.Version") + " " + AppVersion.Display;
             version.ForeColor = UiStyle.Muted;
             version.AutoSize = true;
             version.Location = new Point(85, 87);
@@ -102,11 +101,15 @@ namespace MangaAuthorSorter
             FlowLayoutPanel projectButtons = NewButtonRow();
 
             Button github = NewAutoButton(language.Get("About.GitHub"), 100, false);
-            github.Click += delegate { OpenUrl(GitHubUrl); };
+            github.Click += delegate { OpenUrl(UpdateService.RepositoryUrl); };
             projectButtons.Controls.Add(github);
 
             Button update = NewAutoButton(language.Get("About.CheckUpdates"), 112, false);
-            update.Click += delegate { _updateLabel.Text = language.Get("About.UpdateUnavailableMessage"); };
+            update.Click += delegate
+            {
+                Close();
+                if (checkUpdates != null) checkUpdates();
+            };
             projectButtons.Controls.Add(update);
             project.Controls.Add(projectButtons, 0, 1);
             project.SetColumnSpan(projectButtons, 2);

@@ -26,6 +26,10 @@ namespace MangaAuthorSorter
         private readonly EverythingService _everything;
         private readonly ScanWarmupService _scanWarmup;
         private readonly HistoryStore _historyStore;
+        private readonly UpdateService _updateService = new UpdateService();
+        private ToolStripMenuItem _checkUpdatesItem;
+        private UpdateCheckResult _availableUpdate;
+        private bool _updateCheckRunning;
         private List<PlanItem> _plan = new List<PlanItem>();
         private List<ScanExcludedItem> _lastScanExcludedItems = new List<ScanExcludedItem>();
 
@@ -754,7 +758,7 @@ namespace MangaAuthorSorter
         private void InitializeUi()
         {
             UiStyle.ApplyAppIcon(this);
-            Text = L("App.Title");
+            Text = L("App.Title") + " " + AppVersion.Display;
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(1280, 720);
             Size = new Size(1480, 900);
@@ -781,6 +785,7 @@ namespace MangaAuthorSorter
             Shown += delegate
             {
                 BeginInvoke(new MethodInvoker(LayoutRootPanelBelowMenu));
+                BeginInvoke(new MethodInvoker(StartAutomaticUpdateCheck));
             };
 
             // Hidden state controls retained for compatibility with the
@@ -2253,6 +2258,8 @@ namespace MangaAuthorSorter
             performanceItem.Click += delegate { ShowScanPerformancePanel(); };
             ToolStripMenuItem readmeItem = new ToolStripMenuItem(L("Menu.Readme"));
             readmeItem.Click += delegate { OpenReadme(); };
+            _checkUpdatesItem = new ToolStripMenuItem(L("Menu.CheckUpdates"));
+            _checkUpdatesItem.Click += delegate { CheckForUpdatesManually(); };
             ToolStripMenuItem aboutItem = new ToolStripMenuItem(L("Menu.About"));
             aboutItem.Click += delegate { ShowAboutDialog(); };
             ToolStripMenuItem supportItem = new ToolStripMenuItem(L("Menu.Support"));
@@ -2260,6 +2267,7 @@ namespace MangaAuthorSorter
             helpMenu.DropDownItems.Add(readmeItem);
             helpMenu.DropDownItems.Add(performanceItem);
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
+            helpMenu.DropDownItems.Add(_checkUpdatesItem);
             helpMenu.DropDownItems.Add(aboutItem);
             helpMenu.DropDownItems.Add(supportItem);
 
@@ -2496,10 +2504,87 @@ namespace MangaAuthorSorter
 
         private void ShowAboutDialog()
         {
-            using (AboutForm dlg = new AboutForm(_language, Font, _appDir))
+            using (AboutForm dlg = new AboutForm(_language, Font, _appDir, CheckForUpdatesManually))
             {
                 dlg.ShowDialog(this);
             }
+        }
+
+        private async void StartAutomaticUpdateCheck()
+        {
+            UserSettingsData settings = _settingsStore.Load();
+            if (settings.LastUpdateCheckUtc.HasValue &&
+                DateTime.UtcNow - settings.LastUpdateCheckUtc.Value < TimeSpan.FromHours(24))
+                return;
+
+            UpdateCheckResult result = await RunUpdateCheckAsync();
+            if (result == null) return;
+            _settingsStore.UpdateLastUpdateCheckUtc(DateTime.UtcNow);
+            if (!result.HasUpdate || _availableUpdate != null) return;
+
+            _availableUpdate = result;
+            if (_checkUpdatesItem != null)
+                _checkUpdatesItem.Text = String.Format(L("Menu.UpdateAvailable"), "V" + result.LatestVersion);
+        }
+
+        private async void CheckForUpdatesManually()
+        {
+            if (_updateCheckRunning) return;
+            if (_availableUpdate != null)
+            {
+                ShowUpdateDialog(_availableUpdate);
+                return;
+            }
+
+            if (_checkUpdatesItem != null)
+            {
+                _checkUpdatesItem.Enabled = false;
+                _checkUpdatesItem.Text = L("Update.Checking");
+            }
+
+            UpdateCheckResult result = await RunUpdateCheckAsync();
+            if (_checkUpdatesItem != null)
+            {
+                _checkUpdatesItem.Enabled = true;
+                _checkUpdatesItem.Text = L("Menu.CheckUpdates");
+            }
+            if (result == null) return;
+
+            _settingsStore.UpdateLastUpdateCheckUtc(DateTime.UtcNow);
+            if (result.HasUpdate)
+            {
+                _availableUpdate = result;
+                ShowUpdateDialog(result);
+                return;
+            }
+
+            string message;
+            if (result.Status == UpdateCheckStatus.UpToDate || result.Status == UpdateCheckStatus.DevelopmentVersion)
+                message = String.Format(L("Update.UpToDate"), AppVersion.Display);
+            else if (result.Status == UpdateCheckStatus.NoRelease)
+                message = L("Update.NoRelease");
+            else if (result.Status == UpdateCheckStatus.Timeout)
+                message = L("Update.Timeout");
+            else if (result.Status == UpdateCheckStatus.InvalidVersion)
+                message = L("Update.InvalidVersion");
+            else
+                message = L("Update.Unavailable");
+
+            UiMessageBox.Show(this, message, L("Menu.CheckUpdates"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private async System.Threading.Tasks.Task<UpdateCheckResult> RunUpdateCheckAsync()
+        {
+            if (_updateCheckRunning) return null;
+            _updateCheckRunning = true;
+            try { return await _updateService.CheckAsync(); }
+            finally { _updateCheckRunning = false; }
+        }
+
+        private void ShowUpdateDialog(UpdateCheckResult result)
+        {
+            using (UpdateDialog dlg = new UpdateDialog(_language, Font, result))
+                dlg.ShowDialog(this);
         }
 
         private void ShowSupportDialog()

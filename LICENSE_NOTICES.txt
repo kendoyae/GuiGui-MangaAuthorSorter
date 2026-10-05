@@ -1,6 +1,6 @@
 归归 / MangaAuthorSorter
 许可证与相关说明 / Licenses and Notices
-Version: V1.11.23
+Version: V1.11.24
 Developer: kendo
 Project: https://github.com/kendoyae/MangaAuthorSorter
 

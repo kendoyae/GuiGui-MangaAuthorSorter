@@ -37,6 +37,7 @@ namespace MangaAuthorSorter
         public bool PerformanceDiagnosticsEnabled = false;
         public bool ScanWarmupEnabled = true;
         public bool EverythingEnabled = true;
+        public DateTime? LastUpdateCheckUtc;
 
         // 仅用于从 V1.5 / V1.5.2 自动迁移到
         // “FileTypeProfiles.json”。
@@ -150,6 +151,12 @@ namespace MangaAuthorSorter
                         {
                             bool parsedEverything;
                             if (Boolean.TryParse(decoded, out parsedEverything)) data.EverythingEnabled = parsedEverything;
+                        }
+                        else if (String.Equals(key, "LastUpdateCheckUtc", StringComparison.OrdinalIgnoreCase))
+                        {
+                            DateTime parsedCheck;
+                            if (DateTime.TryParse(decoded, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out parsedCheck))
+                                data.LastUpdateCheckUtc = parsedCheck.ToUniversalTime();
                         }
                         else if (String.Equals(
                                      key,
@@ -599,6 +606,13 @@ namespace MangaAuthorSorter
             Save(current);
         }
 
+        public void UpdateLastUpdateCheckUtc(DateTime value)
+        {
+            UserSettingsData current = Load();
+            current.LastUpdateCheckUtc = value.ToUniversalTime();
+            Save(current);
+        }
+
         private void Save(
             UserSettingsData data)
         {
@@ -687,6 +701,9 @@ namespace MangaAuthorSorter
                     Encode(data.PerformanceDiagnosticsEnabled.ToString()));
                 lines.Add("ScanWarmupEnabled=" + Encode(data.ScanWarmupEnabled.ToString()));
                 lines.Add("EverythingEnabled=" + Encode(data.EverythingEnabled.ToString()));
+                lines.Add("LastUpdateCheckUtc=" + Encode(data.LastUpdateCheckUtc.HasValue
+                    ? data.LastUpdateCheckUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture)
+                    : ""));
 
                 File.WriteAllLines(
                     _path,

@@ -65,7 +65,7 @@ namespace MangaAuthorSorter
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
             request.Method = "GET";
             request.Accept = "application/json";
-            request.UserAgent = "MangaAuthorSorter/1.11.23 (Windows .NET Framework; author identity lookup)";
+            request.UserAgent = "MangaAuthorSorter/" + AppVersion.UserAgentVersion + " (Windows .NET Framework; author identity lookup)";
             request.Timeout = 10000;
             request.ReadWriteTimeout = 10000;
             request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;

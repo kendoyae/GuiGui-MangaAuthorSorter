@@ -1,6 +1,8 @@
 ﻿Program.cs
 AppFiles.cs
 Core\Models.cs
+Core\AppVersion.cs
+Core\UpdateCheckResult.cs
 Core\AuthorRules.cs
 Core\TagCleaningRules.cs
 Core\ScanExclusionRules.cs
@@ -20,6 +22,7 @@ Services\UserSettingsStore.cs
 Services\LanguageManager.cs
 Services\EverythingService.cs
 Services\ScanWarmupService.cs
+Services\UpdateService.cs
 Services\GermanLanguagePack.cs
 Services\HistoryStore.cs
 UI\FastDataGridView.cs
@@ -37,6 +40,7 @@ Forms\BlockListManagerForm.cs
 Forms\FileTypeProfileManagerForm.cs
 Forms\LanguagePackCheckForm.cs
 Forms\AboutForm.cs
+Forms\UpdateDialog.cs
 Forms\LicenseForm.cs
 Forms\SupportForm.cs
 Forms\ExecutionConfirmDialog.cs
