@@ -19,7 +19,12 @@ namespace MangaAuthorSorter
         private readonly Label _feedbackLabel;
         private readonly Label _updateLabel;
 
-        public AboutForm(LanguageManager language, Font appFont, string appDir, Action checkUpdates)
+        public AboutForm(
+            LanguageManager language,
+            Font appFont,
+            string appDir,
+            Action checkUpdates,
+            Action openDeveloperPanel)
         {
             _language = language;
             _appDir = appDir ?? "";
@@ -94,6 +99,22 @@ namespace MangaAuthorSorter
             version.ForeColor = UiStyle.Muted;
             version.AutoSize = true;
             version.Location = new Point(96, 87);
+            int versionClickCount = 0;
+            DateTime lastVersionClick = DateTime.MinValue;
+            version.Click += delegate
+            {
+                DateTime now = DateTime.UtcNow;
+                if (now - lastVersionClick > TimeSpan.FromSeconds(4))
+                    versionClickCount = 0;
+                lastVersionClick = now;
+                versionClickCount++;
+                if (versionClickCount < 10) return;
+
+                versionClickCount = 0;
+                Close();
+                if (openDeveloperPanel != null)
+                    openDeveloperPanel();
+            };
             header.Controls.Add(version);
 
             root.Controls.Add(header, 0, 0);

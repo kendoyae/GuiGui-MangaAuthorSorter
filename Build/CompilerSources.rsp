@@ -35,6 +35,7 @@ UI\UiMessageBox.cs
 Forms\HistoryForm.cs
 Forms\ArchiveSettingsForm.cs
 Forms\OnlineAuthorSettingsForm.cs
+Forms\DeveloperPanelForm.cs
 Forms\TagCleaningRulesForm.cs
 Forms\ScanExclusionRulesForm.cs
 Forms\AliasManagerForm.cs

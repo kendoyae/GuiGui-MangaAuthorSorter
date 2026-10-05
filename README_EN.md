@@ -49,11 +49,10 @@ After selecting an item that requires confirmation or was not recognized, you ca
 - **Scan exclusion rules:** Skip files that should not be included in organization.
 - **Author alias library:** Maintain alternate spellings or names for the same author.
 - **Archive settings:** Adjust grouping quantities, directory naming, and reserved disk space.
-- **Online author lookup:** Disabled by default; enabling it may access public data sources.
 
 ## 5. Everything
 
-Everything integration is optional. When available, GuiGui uses it to discover files more quickly. If it is unavailable, GuiGui automatically falls back to Windows file-system scanning without affecting core functionality.
+<mark>Everything integration is optional. When available, GuiGui uses it to discover files more quickly. If it is unavailable, GuiGui automatically falls back to Windows file-system scanning without affecting core functionality.</mark>
 
 ## 6. Data and Safety
 

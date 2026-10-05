@@ -106,6 +106,25 @@ namespace MangaAuthorSorter
         private List<PlanItem> _preparedPlan;
         private Exception _failure;
         private ScanWarmupMetrics _metrics = new ScanWarmupMetrics();
+        private readonly Dictionary<string, WarmupCacheEntry> _cache = new Dictionary<string, WarmupCacheEntry>(StringComparer.Ordinal);
+        private const int CacheCapacity = 4;
+        private static readonly TimeSpan CacheLifetime = TimeSpan.FromMinutes(10);
+
+        private sealed class WarmupCacheEntry
+        {
+            public DateTime LastUsed;
+            public SearchResult Source;
+            public List<PlanItem> Plan;
+            public ScanWarmupMetrics Metrics;
+            public Dictionary<string, ProjectionCacheEntry> Projections = new Dictionary<string, ProjectionCacheEntry>(StringComparer.Ordinal);
+        }
+
+        private sealed class ProjectionCacheEntry
+        {
+            public List<PlanItem> Plan;
+            public int ClassifiedCount;
+            public int MatchedCount;
+        }
 
         public ScanWarmupService(EverythingService everything, ArchiveEngine engine)
         {
@@ -124,6 +143,7 @@ namespace MangaAuthorSorter
             string sourceKey = request.SourceKey;
             string targetKey = request.TargetKey;
             string planKey = request.PlanKey;
+            ScanWarmupStatusEntry cachedStatus = null;
             lock (_gate)
             {
                 if ((State == ScanWarmupState.Preparing || State == ScanWarmupState.Ready) &&
@@ -131,6 +151,18 @@ namespace MangaAuthorSorter
                     String.Equals(_targetKey, targetKey, StringComparison.Ordinal) &&
                     String.Equals(_planKey, planKey, StringComparison.Ordinal))
                     return;
+
+                WarmupCacheEntry cached;
+                if (_cache.TryGetValue(planKey, out cached) && DateTime.Now - cached.LastUsed <= CacheLifetime)
+                {
+                    CancelLocked(ScanWarmupState.Invalidated);
+                    cached.LastUsed = DateTime.Now; _sourceKey = sourceKey; _targetKey = targetKey; _planKey = planKey;
+                    _sourceCache = Clone(cached.Source); _preparedPlan = ClonePlan(cached.Plan); _metrics = CopyMetrics(cached.Metrics); _failure = null; State = ScanWarmupState.Ready;
+                    cachedStatus = StatusFromCache(cached);
+                }
+                if (cachedStatus != null) { }
+                else
+                {
 
                 bool preserveSource = String.Equals(_sourceKey, sourceKey, StringComparison.Ordinal) &&
                     _sourceCache != null;
@@ -152,7 +184,13 @@ namespace MangaAuthorSorter
                     token,
                     TaskCreationOptions.None,
                     TaskScheduler.Default);
+                }
             }
+            if (cachedStatus != null) { ScanPerformanceDiagnostics.PublishWarmupStatus(cachedStatus); return; }
+            ScanPerformanceDiagnostics.PublishWarmupStatus(new ScanWarmupStatusEntry
+            {
+                State = ScanWarmupState.Preparing
+            });
         }
 
         public SearchResult GetOrRunSource(
@@ -212,6 +250,10 @@ namespace MangaAuthorSorter
         public void Cancel()
         {
             lock (_gate) CancelLocked(ScanWarmupState.Cancelled);
+            ScanPerformanceDiagnostics.PublishWarmupStatus(new ScanWarmupStatusEntry
+            {
+                State = ScanWarmupState.Cancelled
+            });
         }
 
         public bool TryGetPreparedPlan(
@@ -237,6 +279,37 @@ namespace MangaAuthorSorter
             return false;
         }
 
+        public bool TryGetProjection(ScanWarmupRequest request, out List<PlanItem> plan, out int classifiedCount, out int matchedCount)
+        {
+            lock (_gate)
+            {
+                WarmupCacheEntry cached; ProjectionCacheEntry projection;
+                if (request != null && _cache.TryGetValue(request.PlanKey, out cached) &&
+                    cached.Projections.TryGetValue(ProjectionKey(request), out projection))
+                {
+                    cached.LastUsed = DateTime.Now; plan = ClonePlan(projection.Plan);
+                    classifiedCount = projection.ClassifiedCount; matchedCount = projection.MatchedCount; return true;
+                }
+            }
+            plan = null; classifiedCount = 0; matchedCount = 0; return false;
+        }
+
+        public void StoreProjection(ScanWarmupRequest request, List<PlanItem> plan, int classifiedCount, int matchedCount)
+        {
+            if (request == null || plan == null) return;
+            lock (_gate)
+            {
+                WarmupCacheEntry cached;
+                if (!_cache.TryGetValue(request.PlanKey, out cached)) return;
+                cached.LastUsed = DateTime.Now;
+                cached.Projections[ProjectionKey(request)] = new ProjectionCacheEntry
+                { Plan = ClonePlan(plan), ClassifiedCount = classifiedCount, MatchedCount = matchedCount };
+            }
+        }
+
+        private static string ProjectionKey(ScanWarmupRequest request)
+        { return ((int)request.Mode).ToString() + "|" + request.RequestedLimit.ToString(); }
+
         private void Run(ScanWarmupRequest request, string sourceKey, string targetKey, string planKey, long generation, CancellationToken token)
         {
             ThreadPriority originalPriority = Thread.CurrentThread.Priority;
@@ -250,6 +323,11 @@ namespace MangaAuthorSorter
                     delegate { return token.IsCancellationRequested; });
                 targetTimer.Stop();
                 token.ThrowIfCancellationRequested();
+                ScanPerformanceDiagnostics.PublishWarmupStatus(new ScanWarmupStatusEntry
+                {
+                    State = ScanWarmupState.Preparing,
+                    TargetIndexMs = targetTimer.ElapsedMilliseconds
+                });
 
                 Stopwatch sourceTimer = Stopwatch.StartNew();
                 SearchResult source;
@@ -263,6 +341,14 @@ namespace MangaAuthorSorter
                 }
                 sourceTimer.Stop();
                 token.ThrowIfCancellationRequested();
+                ScanPerformanceDiagnostics.PublishWarmupStatus(new ScanWarmupStatusEntry
+                {
+                    State = ScanWarmupState.PartiallyReady,
+                    Provider = source.Backend ?? "",
+                    CandidateCount = source.Files != null ? source.Files.Count : 0,
+                    FileDiscoveryMs = sourceTimer.ElapsedMilliseconds,
+                    TargetIndexMs = targetTimer.ElapsedMilliseconds
+                });
 
                 List<PlanItem> prepared = null;
                 Stopwatch prepareTimer = Stopwatch.StartNew();
@@ -285,7 +371,18 @@ namespace MangaAuthorSorter
                     _metrics.SnapshotPrepareMs = prepareTimer.ElapsedMilliseconds;
                     _preparedPlan = prepared != null ? ClonePlan(prepared) : null;
                     State = ScanWarmupState.Ready;
+                    _cache[planKey] = new WarmupCacheEntry { LastUsed = DateTime.Now, Source = Clone(source), Plan = ClonePlan(prepared), Metrics = CopyMetrics(_metrics) };
+                    TrimCacheLocked();
                 }
+                ScanPerformanceDiagnostics.PublishWarmupStatus(new ScanWarmupStatusEntry
+                {
+                    State = ScanWarmupState.Ready,
+                    Provider = source.Backend ?? "",
+                    CandidateCount = source.Files != null ? source.Files.Count : 0,
+                    FileDiscoveryMs = sourceTimer.ElapsedMilliseconds,
+                    TargetIndexMs = targetTimer.ElapsedMilliseconds,
+                    SnapshotPrepareMs = prepareTimer.ElapsedMilliseconds
+                });
             }
             catch (OperationCanceledException)
             {
@@ -299,6 +396,10 @@ namespace MangaAuthorSorter
                     _failure = ex;
                     State = ScanWarmupState.Failed;
                 }
+                ScanPerformanceDiagnostics.PublishWarmupStatus(new ScanWarmupStatusEntry
+                {
+                    State = ScanWarmupState.Failed
+                });
             }
             finally
             {
@@ -313,6 +414,25 @@ namespace MangaAuthorSorter
             _cancellation = null;
             _task = null;
             State = state;
+        }
+
+        private static ScanWarmupStatusEntry StatusFromCache(WarmupCacheEntry cached)
+        {
+            return new ScanWarmupStatusEntry { State = ScanWarmupState.Ready, Provider = cached.Metrics.Provider,
+                CandidateCount = cached.Source != null && cached.Source.Files != null ? cached.Source.Files.Count : 0,
+                FileDiscoveryMs = cached.Metrics.FileDiscoveryMs, TargetIndexMs = cached.Metrics.TargetIndexMs,
+                SnapshotPrepareMs = cached.Metrics.SnapshotPrepareMs };
+        }
+
+        private void TrimCacheLocked()
+        {
+            while (_cache.Count > CacheCapacity)
+            {
+                string oldestKey = null; DateTime oldest = DateTime.MaxValue;
+                foreach (KeyValuePair<string, WarmupCacheEntry> pair in _cache)
+                    if (pair.Value.LastUsed < oldest) { oldest = pair.Value.LastUsed; oldestKey = pair.Key; }
+                if (oldestKey == null) break; _cache.Remove(oldestKey);
+            }
         }
 
         private static SearchResult Clone(SearchResult source)

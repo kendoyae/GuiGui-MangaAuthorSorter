@@ -28,7 +28,7 @@ Docs\ 中的规则说明、Build\ 中的编译清单、源码文件、csproj 和
 
 程序首次运行会按需创建：
 AuthorAliases.txt
-AuthorEntities.json（作者实体与在线解析缓存）
+AuthorEntities.json（作者实体数据）
 TagCleaningRules.json（标签清洗规则）
 ScanExclusionRules.json（全局扫描排除规则；默认示例规则关闭）
 ExclusionList.txt
@@ -39,10 +39,6 @@ GridLayouts.ini
 
 V1.11.6 起，排除结果通过主界面“已排除”状态筛选查看；排除项始终不参与执行整理。
 UserSettings.ini 中 SafetyReserveGb 默认为 5 GB，可在“设置 → 归档设置”修改。
-
-在线作者解析默认关闭；启用后需要网络连接，当前兼容数据源仍为 Danbooru。
-E-Hentai Provider 不在 V1.11.28 接入范围内，后续版本单独处理。
-网络不可用时本地扫描/归档仍可继续。
 
 Everything64.dll / Everything32.dll 不是强制文件。
 Everything SDK 不可用时，程序会自动回退到文件系统扫描。

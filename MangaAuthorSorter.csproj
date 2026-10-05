@@ -62,6 +62,7 @@
     <Compile Include="Forms\HistoryForm.cs" />
     <Compile Include="Forms\ArchiveSettingsForm.cs" />
     <Compile Include="Forms\OnlineAuthorSettingsForm.cs" />
+    <Compile Include="Forms\DeveloperPanelForm.cs" />
     <Compile Include="Forms\TagCleaningRulesForm.cs" />
     <Compile Include="Forms\ScanExclusionRulesForm.cs" />
     <Compile Include="Forms\AliasManagerForm.cs" />

@@ -43,7 +43,7 @@
 - 关于窗口左下角固定提供“许可证”按钮。
 - 点击后打开 `LicenseForm`。界面按当前语言分为固定分类，不直接把双语原文全部塞入单个文本框。
 - `LICENSE_NOTICES.txt` 继续作为完整双语公开说明随 Portable 发行包分发；许可证窗口提供“打开完整说明”按钮。
-- 当前声明至少覆盖：软件版权、Everything / voidtools 集成、Danbooru 在线服务、Microsoft Windows / .NET Framework、外部链接与网络访问说明。
+- 当前声明至少覆盖：软件版权、Everything / voidtools 集成、Microsoft Windows / .NET Framework、外部链接与网络访问说明。
 - 后续新增第三方库、二进制组件、网络 Provider 或更改项目许可证时，必须同步更新 `LICENSE_NOTICES.txt`。
 
 ## 支持边界

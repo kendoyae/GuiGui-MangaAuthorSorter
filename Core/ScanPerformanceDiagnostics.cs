@@ -11,26 +11,33 @@ namespace MangaAuthorSorter
         public DateTime Time;
         public bool WarmupEnabled, EverythingEnabled, WarmupHit, ReadyBeforeRequest, SnapshotHit;
         public string Provider = "";
-        public long WarmupWaitMs, SnapshotPrepareMs, FileDiscoveryMs, TargetIndexMs;
-        public long CandidatePrepareMs, AuthorMatchMs, SortMs, RowBuildMs, AddRowsMs;
-        public long LayoutMs, FinalizeMs, UiApplyMs, TotalResponseMs;
+        public long WarmupWaitMs, SnapshotPrepareMs, FileDiscoveryMs;
+        public long AuthorMatchMs, UiApplyMs, TotalResponseMs;
         public int CandidateCount, ResultCount;
+    }
+
+    internal sealed class ScanWarmupStatusEntry
+    {
+        public DateTime Time;
+        public ScanWarmupState State;
+        public string Provider = "";
+        public int CandidateCount;
+        public long FileDiscoveryMs, TargetIndexMs, SnapshotPrepareMs;
     }
 
     internal static class ScanPerformanceDiagnostics
     {
-        public const string FormatVersion = "GL1";
-        public const string FieldSchema = "t,h,rs,ht,sh,pw,sp,fd,ti,cp,am,so,rm,ba,lr,uf,ui,tr,c,r";
+        public const string FormatVersion = "GL3";
         private static readonly object Gate = new object();
         private static readonly List<ScanPerformanceEntry> Entries = new List<ScanPerformanceEntry>();
         private static bool _enabled;
         private static bool _warmupEnabled = true;
         private static bool _everythingEnabled = true;
         private static string _logPath = "";
-        private static string _lastContext = "";
-        private static string _lastDate = "";
+        private static ScanWarmupStatusEntry _lastWarmupStatus;
 
         public static event Action<ScanPerformanceEntry> EntryAdded;
+        public static event Action<ScanWarmupStatusEntry> WarmupStatusChanged;
         public static event Action SettingsChanged;
         public static bool WarmupEnabled
         {
@@ -56,7 +63,7 @@ namespace MangaAuthorSorter
             lock (Gate)
             {
                 _logPath = logPath ?? ""; _enabled = enabled; _warmupEnabled = warmupEnabled;
-                _everythingEnabled = everythingEnabled; _lastContext = ""; _lastDate = "";
+                _everythingEnabled = everythingEnabled;
                 Entries.Clear();
                 LoadRecentEntries();
             }
@@ -78,6 +85,16 @@ namespace MangaAuthorSorter
 
         public static List<ScanPerformanceEntry> Snapshot()
         { lock (Gate) return new List<ScanPerformanceEntry>(Entries); }
+        public static ScanWarmupStatusEntry LastWarmupStatus()
+        { lock (Gate) return _lastWarmupStatus; }
+        public static void PublishWarmupStatus(ScanWarmupStatusEntry status)
+        {
+            if (status == null) return;
+            if (status.Time == DateTime.MinValue) status.Time = DateTime.Now;
+            lock (Gate) _lastWarmupStatus = status;
+            Action<ScanWarmupStatusEntry> handler = WarmupStatusChanged;
+            if (handler != null) handler(status);
+        }
         public static void Clear() { lock (Gate) Entries.Clear(); }
 
         private static void AppendCompactLog(ScanPerformanceEntry e)
@@ -86,41 +103,20 @@ namespace MangaAuthorSorter
             try
             {
                 StringBuilder text = new StringBuilder();
-                bool header = !File.Exists(_logPath) || new FileInfo(_logPath).Length == 0 || !ContainsFormatHeader();
-                if (header)
-                {
-                    if (File.Exists(_logPath) && new FileInfo(_logPath).Length > 0) text.AppendLine();
-                    text.AppendLine("#" + FormatVersion);
-                    text.AppendLine("#DATE=" + e.Time.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-                    text.AppendLine("#F=" + FieldSchema);
-                    text.AppendLine("#UNIT=ms");
-                    _lastContext = "";
-                    _lastDate = e.Time.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                }
-                string currentDate = e.Time.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                if (!header && !String.Equals(currentDate, _lastDate, StringComparison.Ordinal))
-                {
-                    text.AppendLine("@DATE=" + currentDate);
-                    _lastDate = currentDate;
-                }
-                string context = "W=" + B(e.WarmupEnabled) + "|E=" + B(e.EverythingEnabled) + "|P=" + ProviderCode(e.Provider);
-                if (!String.Equals(context, _lastContext, StringComparison.Ordinal))
-                {
-                    text.AppendLine((header ? "#CTX|" : "@CTX|") + context);
-                    _lastContext = context;
-                }
-                text.AppendLine(String.Join("|", new string[] { e.Time.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture),
-                    B(e.WarmupHit), B(e.ReadyBeforeRequest), e.ReadyBeforeRequest ? "2" : (e.WarmupHit ? "1" : "0"),
-                    B(e.SnapshotHit), N(e.WarmupWaitMs), N(e.SnapshotPrepareMs), N(e.FileDiscoveryMs), N(e.TargetIndexMs),
-                    N(e.CandidatePrepareMs), N(e.AuthorMatchMs), N(e.SortMs), N(e.RowBuildMs), N(e.AddRowsMs),
-                    N(e.LayoutMs), N(e.FinalizeMs), N(e.UiApplyMs), N(e.TotalResponseMs),
-                    e.CandidateCount.ToString(CultureInfo.InvariantCulture), e.ResultCount.ToString(CultureInfo.InvariantCulture) }));
+                if (!File.Exists(_logPath) || new FileInfo(_logPath).Length == 0 || !ContainsFormatHeader())
+                { if (File.Exists(_logPath) && new FileInfo(_logPath).Length > 0) text.AppendLine(); text.AppendLine("#" + FormatVersion); text.AppendLine("#UNIT=ms; zero-duration fields omitted"); }
+                text.Append(e.Time.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture));
+                Pair(text, "P", ProviderCode(e.Provider)); Pair(text, "H", B(e.WarmupHit)); Pair(text, "RB", B(e.ReadyBeforeRequest)); Pair(text, "SH", B(e.SnapshotHit));
+                PositivePair(text, "WW", e.WarmupWaitMs); PositivePair(text, "SP", e.SnapshotPrepareMs); PositivePair(text, "FD", e.FileDiscoveryMs);
+                PositivePair(text, "AM", e.AuthorMatchMs); PositivePair(text, "UI", e.UiApplyMs);
+                PositivePair(text, "TR", e.TotalResponseMs); Pair(text, "C", e.CandidateCount.ToString(CultureInfo.InvariantCulture)); Pair(text, "R", e.ResultCount.ToString(CultureInfo.InvariantCulture)); text.AppendLine();
                 File.AppendAllText(_logPath, text.ToString(), new UTF8Encoding(false));
             }
             catch { }
         }
         private static string B(bool value) { return value ? "1" : "0"; }
-        private static string N(long value) { return value.ToString(CultureInfo.InvariantCulture); }
+        private static void Pair(StringBuilder text, string key, string value) { text.Append('|').Append(key).Append('=').Append(value); }
+        private static void PositivePair(StringBuilder text, string key, long value) { if (value > 0) Pair(text, key, value.ToString(CultureInfo.InvariantCulture)); }
         private static string ProviderCode(string provider)
         { return String.Equals(provider, "Everything SDK", StringComparison.OrdinalIgnoreCase) ? "ESDK" : "SYS"; }
 
@@ -136,49 +132,31 @@ namespace MangaAuthorSorter
             if (String.IsNullOrWhiteSpace(_logPath) || !File.Exists(_logPath)) return;
             try
             {
-                bool gl1 = false, warmup = true, everything = true;
-                string provider = "FileSystem";
-                DateTime date = DateTime.Today;
+                bool gl2 = false;
                 foreach (string raw in File.ReadAllLines(_logPath, Encoding.UTF8))
                 {
                     string line = (raw ?? "").Trim();
-                    if (line == "#GL1") { gl1 = true; continue; }
-                    if (line.StartsWith("#GL", StringComparison.Ordinal) && line != "#GL1") { gl1 = false; continue; }
-                    if (!gl1) continue;
-                    if (line.StartsWith("#DATE=", StringComparison.Ordinal) || line.StartsWith("@DATE=", StringComparison.Ordinal))
-                    {
-                        DateTime parsedDate;
-                        if (DateTime.TryParseExact(line.Substring(6), "yyyy-MM-dd", CultureInfo.InvariantCulture,
-                            DateTimeStyles.None, out parsedDate)) { date = parsedDate.Date; _lastDate = line.Substring(6); }
-                        continue;
-                    }
-                    if (line.StartsWith("#CTX|", StringComparison.Ordinal) || line.StartsWith("@CTX|", StringComparison.Ordinal))
-                    {
-                        string[] parts = line.Substring(5).Split('|');
-                        foreach (string part in parts)
-                        {
-                            if (part == "W=0") warmup = false; else if (part == "W=1") warmup = true;
-                            else if (part == "E=0") everything = false; else if (part == "E=1") everything = true;
-                            else if (part == "P=ESDK") provider = "Everything SDK"; else if (part == "P=SYS") provider = "FileSystem";
-                        }
-                        continue;
-                    }
+                    if (line == "#GL3") { gl2 = true; continue; }
+                    if (line.StartsWith("#GL", StringComparison.Ordinal)) { gl2 = false; continue; }
+                    if (!gl2) continue;
                     if (line.StartsWith("#", StringComparison.Ordinal) || line.Length == 0) continue;
                     string[] v = line.Split('|');
-                    if (v.Length != 20) continue;
-                    DateTime time; if (!DateTime.TryParseExact(v[0], "HH:mm:ss.fff", CultureInfo.InvariantCulture, DateTimeStyles.None, out time)) continue;
-                    long[] n = new long[15]; bool valid = true;
-                    for (int i = 0; i < n.Length; i++) if (!Int64.TryParse(v[i + 5], NumberStyles.Integer, CultureInfo.InvariantCulture, out n[i])) { valid = false; break; }
-                    if (!valid) continue;
-                    Entries.Add(new ScanPerformanceEntry { Time = date.Add(time.TimeOfDay), WarmupEnabled = warmup, EverythingEnabled = everything,
-                        Provider = provider, WarmupHit = v[1] == "1", ReadyBeforeRequest = v[2] == "1", SnapshotHit = v[4] == "1",
-                        WarmupWaitMs = n[0], SnapshotPrepareMs = n[1], FileDiscoveryMs = n[2], TargetIndexMs = n[3], CandidatePrepareMs = n[4],
-                        AuthorMatchMs = n[5], SortMs = n[6], RowBuildMs = n[7], AddRowsMs = n[8], LayoutMs = n[9], FinalizeMs = n[10],
-                        UiApplyMs = n[11], TotalResponseMs = n[12], CandidateCount = (int)n[13], ResultCount = (int)n[14] });
+                    DateTime time; if (!DateTime.TryParseExact(v[0], "yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture, DateTimeStyles.None, out time)) continue;
+                    Dictionary<string, string> fields = new Dictionary<string, string>(StringComparer.Ordinal);
+                    for (int i = 1; i < v.Length; i++) { int split = v[i].IndexOf('='); if (split > 0) fields[v[i].Substring(0, split)] = v[i].Substring(split + 1); }
+                    ScanPerformanceEntry entry = new ScanPerformanceEntry { Time = time, WarmupEnabled = GetBool(fields, "H") || GetBool(fields, "RB"), EverythingEnabled = Get(fields, "P") == "ESDK",
+                        Provider = Get(fields, "P") == "ESDK" ? "Everything SDK" : "FileSystem", WarmupHit = GetBool(fields, "H"), ReadyBeforeRequest = GetBool(fields, "RB"), SnapshotHit = GetBool(fields, "SH"),
+                        WarmupWaitMs = GetLong(fields, "WW"), SnapshotPrepareMs = GetLong(fields, "SP"), FileDiscoveryMs = GetLong(fields, "FD"),
+                        AuthorMatchMs = GetLong(fields, "AM"), UiApplyMs = GetLong(fields, "UI"), TotalResponseMs = GetLong(fields, "TR"),
+                        CandidateCount = (int)GetLong(fields, "C"), ResultCount = (int)GetLong(fields, "R") };
+                    Entries.Add(entry);
                     if (Entries.Count > 1000) Entries.RemoveAt(0);
                 }
             }
             catch { Entries.Clear(); }
         }
+        private static string Get(Dictionary<string, string> fields, string key) { string value; return fields.TryGetValue(key, out value) ? value : ""; }
+        private static bool GetBool(Dictionary<string, string> fields, string key) { return Get(fields, key) == "1"; }
+        private static long GetLong(Dictionary<string, string> fields, string key) { long value; return Int64.TryParse(Get(fields, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out value) ? value : 0; }
     }
 }

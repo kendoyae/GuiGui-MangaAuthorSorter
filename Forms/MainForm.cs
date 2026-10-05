@@ -158,6 +158,7 @@ namespace MangaAuthorSorter
         private Stopwatch _scanResponseTimer;
         private System.Windows.Forms.Timer _warmupDebounceTimer;
         private ScanPerformanceForm _scanPerformanceForm;
+        private DeveloperPanelForm _developerPanelForm;
         private decimal _safetyReserveGb = 5M;
         private bool _onlineAuthorLookupEnabled;
         private string _onlineAuthorProvider = "Danbooru";
@@ -195,7 +196,6 @@ namespace MangaAuthorSorter
             public OnlineAuthorResolutionStats OnlineStats = new OnlineAuthorResolutionStats();
             public long ElapsedMilliseconds;
             public ScanWarmupMetrics WarmupMetrics = new ScanWarmupMetrics();
-            public long CandidatePrepareMs;
             public long RecognitionPlanMs;
         }
 
@@ -214,11 +214,6 @@ namespace MangaAuthorSorter
 
         private sealed class GridRenderMetrics
         {
-            public long SortMs;
-            public long RowBuildMs;
-            public long AddRowsMs;
-            public long LayoutMs;
-            public long FinalizeMs;
             public long TotalMs;
         }
 
@@ -2142,9 +2137,6 @@ namespace MangaAuthorSorter
             ToolStripMenuItem scanExclusionItem = new ToolStripMenuItem(L("Menu.ScanExclusionRules"));
             scanExclusionItem.Click += delegate { ShowScanExclusionRulesDialog(); };
 
-            ToolStripMenuItem onlineAuthorItem = new ToolStripMenuItem(L("Menu.OnlineAuthorSettings"));
-            onlineAuthorItem.Click += delegate { ShowOnlineAuthorSettingsDialog(); };
-
             ToolStripMenuItem languageMenu = new ToolStripMenuItem(L("Menu.Language"));
 
             foreach (LanguagePackInfo pack in _language.GetPacks())
@@ -2219,7 +2211,6 @@ namespace MangaAuthorSorter
             settingsMenu.DropDownItems.Add(fileTypesItem);
             settingsMenu.DropDownItems.Add(tagCleaningItem);
             settingsMenu.DropDownItems.Add(scanExclusionItem);
-            settingsMenu.DropDownItems.Add(onlineAuthorItem);
             settingsMenu.DropDownItems.Add(new ToolStripSeparator());
             settingsMenu.DropDownItems.Add(languageMenu);
 
@@ -2448,7 +2439,7 @@ namespace MangaAuthorSorter
             UpdateFilterCounts();
         }
 
-        private void ShowOnlineAuthorSettingsDialog()
+        private void ShowOnlineAuthorSettingsDialog(IWin32Window owner)
         {
             using (OnlineAuthorSettingsForm dlg = new OnlineAuthorSettingsForm(
                 _language,
@@ -2459,7 +2450,7 @@ namespace MangaAuthorSorter
                 _maxOnlineLookupsPerScan,
                 _authorEntityStore.Path))
             {
-                if (dlg.ShowDialog(this) != DialogResult.OK)
+                if (dlg.ShowDialog(owner ?? this) != DialogResult.OK)
                     return;
 
                 _onlineAuthorLookupEnabled = dlg.LookupEnabled;
@@ -2521,9 +2512,33 @@ namespace MangaAuthorSorter
 
         private void ShowAboutDialog()
         {
-            using (AboutForm dlg = new AboutForm(_language, Font, _appDir, CheckForUpdatesManually))
+            using (AboutForm dlg = new AboutForm(
+                _language,
+                Font,
+                _appDir,
+                CheckForUpdatesManually,
+                ShowDeveloperPanel))
             {
                 dlg.ShowDialog(this);
+            }
+        }
+
+        private void ShowDeveloperPanel()
+        {
+            if (_developerPanelForm == null || _developerPanelForm.IsDisposed)
+            {
+                _developerPanelForm = new DeveloperPanelForm(
+                    _language,
+                    Font,
+                    ShowOnlineAuthorSettingsDialog);
+                _developerPanelForm.FormClosed += delegate { _developerPanelForm = null; };
+                _developerPanelForm.Show(this);
+            }
+            else
+            {
+                if (_developerPanelForm.WindowState == FormWindowState.Minimized)
+                    _developerPanelForm.WindowState = FormWindowState.Normal;
+                _developerPanelForm.Activate();
             }
         }
 
@@ -4741,14 +4756,7 @@ namespace MangaAuthorSorter
                             WarmupWaitMs = result.WarmupMetrics.WarmupWaitMs,
                             SnapshotPrepareMs = result.WarmupMetrics.SnapshotPrepareMs,
                             FileDiscoveryMs = result.WarmupMetrics.FileDiscoveryMs,
-                            TargetIndexMs = result.WarmupMetrics.TargetIndexMs,
-                            CandidatePrepareMs = result.CandidatePrepareMs,
                             AuthorMatchMs = result.RecognitionPlanMs,
-                            SortMs = gridMetrics.SortMs,
-                            RowBuildMs = gridMetrics.RowBuildMs,
-                            AddRowsMs = gridMetrics.AddRowsMs,
-                            LayoutMs = gridMetrics.LayoutMs,
-                            FinalizeMs = gridMetrics.FinalizeMs,
                             UiApplyMs = gridMetrics.TotalMs,
                             TotalResponseMs = result.ElapsedMilliseconds,
                             CandidateCount = result.CandidateCount,
@@ -4949,9 +4957,13 @@ namespace MangaAuthorSorter
                 bool earlyStopped = false;
                 if (snapshotHit)
                 {
-                    plan = ProjectPreparedSnapshot(
-                        request, preparedPlan, cancelRequested,
-                        out classifiedCount, out matchedCount);
+                    if (!_scanWarmup.TryGetProjection(warmupRequest, out plan, out classifiedCount, out matchedCount))
+                    {
+                        plan = ProjectPreparedSnapshot(
+                            request, preparedPlan, cancelRequested,
+                            out classifiedCount, out matchedCount);
+                        _scanWarmup.StoreProjection(warmupRequest, plan, classifiedCount, matchedCount);
+                    }
                 }
                 else
                 {
@@ -4980,7 +4992,6 @@ namespace MangaAuthorSorter
                 filteredResult.EarlyStopped = earlyStopped;
                 filteredResult.OnlineStats = onlineStats;
                 filteredResult.WarmupMetrics = warmupMetrics;
-                filteredResult.CandidatePrepareMs = candidateTimer.ElapsedMilliseconds;
                 recognitionTimer.Stop();
                 filteredResult.RecognitionPlanMs = recognitionTimer.ElapsedMilliseconds;
 
@@ -5007,7 +5018,6 @@ namespace MangaAuthorSorter
             result.EarlyStopped = false;
             result.OnlineStats = onlineStats;
             result.WarmupMetrics = warmupMetrics;
-            result.CandidatePrepareMs = candidateTimer.ElapsedMilliseconds;
             recognitionTimer.Stop();
             result.RecognitionPlanMs = recognitionTimer.ElapsedMilliseconds;
             result.ElapsedMilliseconds =
@@ -5031,34 +5041,10 @@ namespace MangaAuthorSorter
             if (request.RequestedLimit > 0 && matched.Count > request.RequestedLimit)
                 matched = matched.Take(request.RequestedLimit).ToList();
 
-            // New-author destinations depend on the selected executable subset.
-            // Rebuild only that subset; the expensive complete classification and
-            // file discovery remain reused from the prepared snapshot.
-            if (request.Mode != ScanModeKind.NewAuthor || matched.Count == 0)
-                return matched;
-
-            Dictionary<string, PlanItem> classifications = matched.ToDictionary(
-                delegate(PlanItem item) { return item.SourcePath; },
-                StringComparer.OrdinalIgnoreCase);
-            List<FileInfo> files = new List<FileInfo>();
-            foreach (PlanItem item in matched)
-            {
-                if (cancelRequested != null && cancelRequested())
-                    throw new OperationCanceledException();
-                if (File.Exists(item.SourcePath)) files.Add(new FileInfo(item.SourcePath));
-            }
-            List<PlanItem> rebuilt = _engine.BuildPlan(
-                files, request.Root, request.MaxAuthors,
-                request.GroupTemplate, request.RecognizedGroupTemplates,
-                request.AuthorFolderTemplate, request.RecognizedAuthorFolderTemplates,
-                null, cancelRequested, ScanProgressStage.Rebuilding);
-            foreach (PlanItem item in rebuilt)
-            {
-                PlanItem classified;
-                if (classifications.TryGetValue(item.SourcePath, out classified))
-                    PreserveFilteredClassification(item, classified);
-            }
-            return rebuilt;
+            // Every mode is a projection of the same complete prepared plan.
+            // Rebuilding NewAuthor here duplicated classification already used by
+            // the main status filters and made the first mode switch unnecessarily slow.
+            return matched;
         }
 
         private List<PlanItem> BuildFilteredPlanWithEarlyStop(
@@ -5384,7 +5370,6 @@ namespace MangaAuthorSorter
                 // Build and sort the full preview only when the preview data itself
                 // changes. Status/search switches reuse these row objects and batch
                 // attach only the matching subset, so cells are not recreated.
-                Stopwatch sortTimer = Stopwatch.StartNew();
                 _allGridItems = GetPreviewItems()
                     .OrderByDescending(
                         delegate(PlanItem p)
@@ -5392,17 +5377,9 @@ namespace MangaAuthorSorter
                             return p != null ? p.LastWriteTime : DateTime.MinValue;
                         })
                     .ToList();
-                sortTimer.Stop();
-                metrics.SortMs = sortTimer.ElapsedMilliseconds;
-
-                // VirtualMode keeps only the PlanItem model. DataGridView asks
-                // for values only for cells it needs to paint.
-                metrics.RowBuildMs = 0;
-                metrics.AddRowsMs = 0;
             }
             finally
             {
-                Stopwatch layoutTimer = Stopwatch.StartNew();
                 // Responsive widths are calculated once for the complete data set.
                 // Short columns are then frozen so filter switches do not repeat
                 // AllCells measurements and the layout stays visually stable.
@@ -5410,16 +5387,11 @@ namespace MangaAuthorSorter
                 FreezeMainGridShortColumnWidths();
                 GridInteraction.SetBulkLayoutLoading(_grid, previousGridLoading);
                 _grid.ResumeLayout(false);
-                layoutTimer.Stop();
-                metrics.LayoutMs = layoutTimer.ElapsedMilliseconds;
             }
 
-            Stopwatch finalizeTimer = Stopwatch.StartNew();
             UpdateFilterCounts();
             UpdateViewFilterButtonStyles();
             ApplyCurrentGridFilter(selectPath);
-            finalizeTimer.Stop();
-            metrics.FinalizeMs = finalizeTimer.ElapsedMilliseconds;
             totalTimer.Stop();
             metrics.TotalMs = totalTimer.ElapsedMilliseconds;
             return metrics;

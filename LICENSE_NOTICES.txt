@@ -16,18 +16,14 @@ Everything 与 Everything SDK 由 David Carpenter / voidtools 开发，是独立
 官方网站：https://www.voidtools.com/
 SDK 说明：https://www.voidtools.com/support/everything/sdk/
 
-三、Danbooru 在线服务
-启用在线作者解析时，归归可向 Danbooru 的公开接口发送作者查询字符串并读取公开返回数据。Danbooru 是独立第三方服务，其内容、可用性、服务条款和隐私政策由 Danbooru 自行管理。
-服务地址：https://danbooru.donmai.us/
-
-四、Microsoft Windows / .NET Framework
+三、Microsoft Windows / .NET Framework
 归归是 Windows 桌面应用，使用 Microsoft Windows 与 .NET Framework 提供的系统 API 和运行时组件。Microsoft、Windows 与 .NET 相关名称和商标归其各自权利人所有。
 
-五、外部链接与第三方平台
-软件中的 GitHub、QQ、爱发电、Ko-fi、voidtools、Danbooru 等外部入口仅用于项目、反馈、支持或可选功能。各平台的名称、商标、内容与服务由相应权利人负责。
+四、外部链接与第三方平台
+软件中的 GitHub、QQ、爱发电、Ko-fi、voidtools 等外部入口仅用于项目、反馈、支持或可选功能。各平台的名称、商标、内容与服务由相应权利人负责。
 
-六、网络访问说明
-归归的本地扫描与整理功能不要求持续联网。只有在用户主动使用在线作者解析、Everything SDK 自动获取、打开项目/反馈/支持链接等可选功能时，程序才会进行相应网络访问或调用系统浏览器/外部应用。
+五、网络访问说明
+归归的本地扫描与整理功能不要求持续联网。只有在用户主动使用 Everything SDK 自动获取、打开项目/反馈/支持链接等可选功能时，程序才会进行相应网络访问或调用系统浏览器/外部应用。
 
 ==================== English Notice ====================
 
@@ -41,17 +37,13 @@ Everything and the Everything SDK are developed by David Carpenter / voidtools a
 Official site: https://www.voidtools.com/
 SDK information: https://www.voidtools.com/support/everything/sdk/
 
-3. Danbooru online service
-When online author resolution is enabled, GuiGui may send author-name queries to Danbooru's public API and read public response data. Danbooru is an independent third-party service and is not affiliated with or endorsed by GuiGui.
-Service: https://danbooru.donmai.us/
-
-4. Microsoft Windows / .NET Framework
+3. Microsoft Windows / .NET Framework
 GuiGui is a Windows desktop application and uses system APIs/runtime components supplied by Microsoft Windows and .NET Framework. Microsoft, Windows and .NET names and trademarks belong to their respective owners.
 
-5. External links and third-party platforms
-External links such as GitHub, QQ, Afdian, Ko-fi, voidtools and Danbooru are provided for project access, feedback, support or optional functionality. Their names, trademarks, content and services belong to their respective owners.
+4. External links and third-party platforms
+External links such as GitHub, QQ, Afdian, Ko-fi and voidtools are provided for project access, feedback, support or optional functionality. Their names, trademarks, content and services belong to their respective owners.
 
-6. Network access notice
-Local scanning and sorting do not require continuous network access. Network access or external application/browser launching occurs only when the user invokes relevant optional features such as online author resolution, Everything SDK retrieval, or project/feedback/support links.
+5. Network access notice
+Local scanning and sorting do not require continuous network access. Network access or external application/browser launching occurs only when the user invokes relevant optional features such as Everything SDK retrieval or project/feedback/support links.
 
 This file centralizes public copyright, third-party component and external-service notices for this release. Update it whenever licensing, third-party components or network services change.

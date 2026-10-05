@@ -17,7 +17,6 @@ namespace MangaAuthorSorter
         {
             "License.Section.Application",
             "License.Section.Everything",
-            "License.Section.Danbooru",
             "License.Section.Microsoft",
             "License.Section.External",
             "License.Section.Network"
@@ -27,7 +26,6 @@ namespace MangaAuthorSorter
         {
             "License.Body.Application",
             "License.Body.Everything",
-            "License.Body.Danbooru",
             "License.Body.Microsoft",
             "License.Body.External",
             "License.Body.Network"
