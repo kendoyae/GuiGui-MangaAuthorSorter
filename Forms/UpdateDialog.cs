@@ -23,7 +23,7 @@ namespace MangaAuthorSorter
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));
             Controls.Add(root);
 
             Label title = new Label();
@@ -54,21 +54,28 @@ namespace MangaAuthorSorter
             notes.Text = String.IsNullOrWhiteSpace(result.ReleaseNotes) ? language.Get("Update.NoNotes") : result.ReleaseNotes;
             root.Controls.Add(notes);
 
-            FlowLayoutPanel buttons = new FlowLayoutPanel();
+            TableLayoutPanel buttons = new TableLayoutPanel();
             buttons.Dock = DockStyle.Fill;
-            buttons.FlowDirection = FlowDirection.RightToLeft;
+            buttons.Margin = new Padding(0);
             buttons.Padding = new Padding(0, 12, 0, 0);
+            buttons.ColumnCount = 3;
+            buttons.RowCount = 1;
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             Button later = UiStyle.NewButton(language.Get("Update.Later"), 100, false);
             later.DialogResult = DialogResult.Cancel;
+            later.Margin = new Padding(0);
             Button download = UiStyle.NewButton(language.Get("Update.Download"), 130, true);
+            download.Margin = new Padding(0, 0, 8, 0);
             download.Click += delegate
             {
                 string url = String.IsNullOrWhiteSpace(result.ReleaseUrl) ? UpdateService.ReleasesUrl : result.ReleaseUrl;
                 try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
                 catch { UiMessageBox.Show(this, language.Get("Update.OpenFailed"), Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }
             };
-            buttons.Controls.Add(later);
-            buttons.Controls.Add(download);
+            buttons.Controls.Add(download, 1, 0);
+            buttons.Controls.Add(later, 2, 0);
             root.Controls.Add(buttons);
             AcceptButton = download;
             CancelButton = later;

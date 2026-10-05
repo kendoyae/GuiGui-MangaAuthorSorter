@@ -2608,7 +2608,7 @@ namespace MangaAuthorSorter
 
         private void ShowSupportDialog()
         {
-            using (SupportForm dlg = new SupportForm(_language, Font))
+            using (SupportForm dlg = new SupportForm(_language, Font, _appDir))
             {
                 dlg.ShowDialog(this);
             }

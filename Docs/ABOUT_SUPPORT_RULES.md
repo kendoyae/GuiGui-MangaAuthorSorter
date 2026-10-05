@@ -17,8 +17,8 @@
 
 ### 支持项目
 只负责自愿支持入口：
-- 微信赞赏码：`Assets/SupportWeChat.png`
-- 支付宝收款码：`Assets/SupportAlipay.png`
+- 微信赞赏码：优先读取 GitHub Pages 远程配置，失败时使用本地缓存，最后回退至 `Assets/SupportWeChat.png`
+- 支付宝收款码：优先读取 GitHub Pages 远程配置，失败时使用本地缓存，最后回退至 `Assets/SupportAlipay.png`
 - 爱发电：https://afdian.com/a/kendo
 - Ko-fi：https://ko-fi.com/kendoyae
 - Patreon：当前不显示
@@ -53,8 +53,13 @@
 
 ## 二维码资源
 
-- 图片缺失时只显示占位提示，不报错，不阻止“支持项目”页面打开。
-- Portable 发布包复制整个 `Assets` 目录；后续替换二维码不需要修改 SupportForm 布局。
+- 固定配置入口为 `https://kendoyae.github.io/GuiGui-MangaAuthorSorter/donation.json`。
+- 在线图片只接受 HTTPS，且域名必须为 `kendoyae.github.io`，路径必须位于 `/GuiGui-MangaAuthorSorter/` 下。
+- 加载顺序固定为：远程最新版 → `DonationCache` 本地缓存 → EXE 内置备用图。
+- 在线获取和缓存失败时不报错，也不阻止“支持项目”页面打开。
+- 成功取得的配置与图片缓存在程序目录的 `DonationCache` 文件夹。
+- 在线按钮只接受预设的爱发电和 Ko-fi HTTPS 域名，配置不得跳转到其他站点。
+- 更新二维码时替换 Pages 上的图片并修改 `donation.json`；旧版 EXE 无需重新发布。
 
 ## UI 原则
 

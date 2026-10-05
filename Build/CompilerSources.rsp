@@ -23,6 +23,7 @@ Services\LanguageManager.cs
 Services\EverythingService.cs
 Services\ScanWarmupService.cs
 Services\UpdateService.cs
+Services\DonationService.cs
 Services\EmbeddedResourceService.cs
 Services\GermanLanguagePack.cs
 Services\HistoryStore.cs

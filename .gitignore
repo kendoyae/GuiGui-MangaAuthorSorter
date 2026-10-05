@@ -27,6 +27,7 @@ FileTypeProfiles.json
 TagCleaningRules.json
 ScanExclusionRules.json
 ScanPerformance.log
+DonationCache/
 
 # Runtime temporary / recovery files
 *.tmp

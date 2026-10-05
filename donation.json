@@ -1,0 +1,19 @@
+{
+  "Version": 1,
+  "WeChat": {
+    "Enabled": true,
+    "QrCodeUrl": "https://kendoyae.github.io/GuiGui-MangaAuthorSorter/donation/wechat.png"
+  },
+  "Alipay": {
+    "Enabled": true,
+    "QrCodeUrl": "https://kendoyae.github.io/GuiGui-MangaAuthorSorter/donation/alipay.png"
+  },
+  "Afdian": {
+    "Enabled": true,
+    "Url": "https://afdian.com/a/kendo"
+  },
+  "KoFi": {
+    "Enabled": true,
+    "Url": "https://ko-fi.com/kendoyae"
+  }
+}

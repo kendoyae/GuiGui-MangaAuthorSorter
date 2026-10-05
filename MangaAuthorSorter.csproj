@@ -50,6 +50,7 @@
     <Compile Include="Services\EverythingService.cs" />
     <Compile Include="Services\ScanWarmupService.cs" />
     <Compile Include="Services\UpdateService.cs" />
+    <Compile Include="Services\DonationService.cs" />
     <Compile Include="Services\EmbeddedResourceService.cs" />
     <Compile Include="Services\GermanLanguagePack.cs" />
     <Compile Include="Services\HistoryStore.cs" />

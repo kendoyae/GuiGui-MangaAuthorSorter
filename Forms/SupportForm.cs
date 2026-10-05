@@ -1,20 +1,26 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 
 namespace MangaAuthorSorter
 {
     internal sealed class SupportForm : Form
     {
-        private const string AfdianUrl = "https://afdian.com/a/kendo";
-        private const string KoFiUrl = "https://ko-fi.com/kendoyae";
-
         private readonly LanguageManager _language;
+        private readonly DonationService _donationService;
+        private PictureBox _wechatPicture;
+        private PictureBox _alipayPicture;
+        private Button _afdianButton;
+        private Button _koFiButton;
+        private string _afdianUrl = DonationService.DefaultAfdianUrl;
+        private string _koFiUrl = DonationService.DefaultKoFiUrl;
 
-        public SupportForm(LanguageManager language, Font appFont)
+        public SupportForm(LanguageManager language, Font appFont, string appDir)
         {
             _language = language;
+            _donationService = new DonationService(appDir);
 
             UiStyle.ApplyDialog(this, appFont);
             Text = language.Get("Support.Title");
@@ -70,8 +76,8 @@ namespace MangaAuthorSorter
             qrRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             qrRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             qrRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            qrRow.Controls.Add(CreateQrCard(language.Get("Support.WeChat"), EmbeddedResourceService.SupportWeChat, false), 0, 0);
-            qrRow.Controls.Add(CreateQrCard(language.Get("Support.Alipay"), EmbeddedResourceService.SupportAlipay, true), 1, 0);
+            qrRow.Controls.Add(CreateQrCard(language.Get("Support.WeChat"), EmbeddedResourceService.SupportWeChat, false, out _wechatPicture), 0, 0);
+            qrRow.Controls.Add(CreateQrCard(language.Get("Support.Alipay"), EmbeddedResourceService.SupportAlipay, true, out _alipayPicture), 1, 0);
             root.Controls.Add(qrRow, 0, 3);
 
             Label onlineTitle = NewSectionTitle(language.Get("Support.OnlineSupport"));
@@ -87,15 +93,15 @@ namespace MangaAuthorSorter
             onlineButtons.FlowDirection = FlowDirection.LeftToRight;
             onlineButtons.WrapContents = false;
 
-            Button afdian = NewAutoButton(_language.Get("Support.Afdian"), 160, false);
-            afdian.Margin = new Padding(0, 0, 12, 0);
-            afdian.Click += delegate { OpenUrl(AfdianUrl); };
-            onlineButtons.Controls.Add(afdian);
+            _afdianButton = NewAutoButton(_language.Get("Support.Afdian"), 160, false);
+            _afdianButton.Margin = new Padding(0, 0, 12, 0);
+            _afdianButton.Click += delegate { OpenUrl(_afdianUrl); };
+            onlineButtons.Controls.Add(_afdianButton);
 
-            Button kofi = NewAutoButton(_language.Get("Support.KoFi"), 160, false);
-            kofi.Margin = new Padding(0);
-            kofi.Click += delegate { OpenUrl(KoFiUrl); };
-            onlineButtons.Controls.Add(kofi);
+            _koFiButton = NewAutoButton(_language.Get("Support.KoFi"), 160, false);
+            _koFiButton.Margin = new Padding(0);
+            _koFiButton.Click += delegate { OpenUrl(_koFiUrl); };
+            onlineButtons.Controls.Add(_koFiButton);
 
             root.Controls.Add(onlineButtons, 0, 5);
 
@@ -120,9 +126,15 @@ namespace MangaAuthorSorter
 
             AcceptButton = close;
             CancelButton = close;
+            Shown += async delegate { await LoadDonationContentAsync(); };
+            FormClosed += delegate
+            {
+                DisposePicture(_wechatPicture);
+                DisposePicture(_alipayPicture);
+            };
         }
 
-        private Control CreateQrCard(string titleText, string resourceName, bool rightCard)
+        private Control CreateQrCard(string titleText, string resourceName, bool rightCard, out PictureBox picture)
         {
             TableLayoutPanel card = new TableLayoutPanel();
             card.Anchor = AnchorStyles.None;
@@ -146,20 +158,15 @@ namespace MangaAuthorSorter
             imageHost.BackColor = Color.White;
 
             Image image = EmbeddedResourceService.ReadImage(resourceName);
+            picture = null;
             if (image != null)
             {
-                PictureBox picture = new PictureBox();
+                picture = new PictureBox();
                 picture.Dock = DockStyle.Fill;
                 picture.Padding = new Padding(0);
                 picture.SizeMode = PictureBoxSizeMode.Zoom;
                 picture.Image = image;
                 imageHost.Controls.Add(picture);
-                Image ownedImage = image;
-                FormClosed += delegate
-                {
-                    try { ownedImage.Dispose(); }
-                    catch { }
-                };
             }
             else
             {
@@ -172,6 +179,53 @@ namespace MangaAuthorSorter
 
             card.Controls.Add(imageHost, 0, 1);
             return card;
+        }
+
+        private async System.Threading.Tasks.Task LoadDonationContentAsync()
+        {
+            DonationContent content;
+            try { content = await _donationService.LoadAsync(); }
+            catch { return; }
+            if (content == null || IsDisposed) return;
+
+            ApplyRemoteImage(_wechatPicture, content.WeChatImage, content.WeChatEnabled);
+            ApplyRemoteImage(_alipayPicture, content.AlipayImage, content.AlipayEnabled);
+            _afdianUrl = content.AfdianUrl;
+            _koFiUrl = content.KoFiUrl;
+            _afdianButton.Visible = content.AfdianEnabled;
+            _koFiButton.Visible = content.KoFiEnabled;
+        }
+
+        private static void ApplyRemoteImage(PictureBox picture, byte[] bytes, bool enabled)
+        {
+            if (picture == null) return;
+            picture.Visible = enabled;
+            if (!enabled || bytes == null || bytes.Length == 0) return;
+
+            Image replacement = null;
+            try
+            {
+                using (MemoryStream stream = new MemoryStream(bytes))
+                using (Image source = Image.FromStream(stream, true, true))
+                    replacement = new Bitmap(source);
+            }
+            catch { return; }
+
+            Image previous = picture.Image;
+            picture.Image = replacement;
+            if (previous != null)
+            {
+                try { previous.Dispose(); }
+                catch { }
+            }
+        }
+
+        private static void DisposePicture(PictureBox picture)
+        {
+            if (picture == null || picture.Image == null) return;
+            try { picture.Image.Dispose(); }
+            catch { }
+            picture.Image = null;
         }
 
         private static Label NewSectionTitle(string text)
