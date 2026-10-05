@@ -102,7 +102,9 @@ namespace MangaAuthorSorter
         public static void ApplyDialog(Form form, Font font)
         {
             if (form == null) return;
-            ApplyAppIcon(form);
+            // Secondary windows use a clean title bar without the application icon.
+            // The main window still receives the icon through ApplyAppIcon.
+            form.ShowIcon = false;
             // Keep every secondary window on the same DPI scaling model as the main window.
             // This prevents footer/buttons from being clipped when Windows display scaling is above 100%.
             form.AutoScaleMode = AutoScaleMode.Dpi;

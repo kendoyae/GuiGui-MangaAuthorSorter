@@ -1,6 +1,10 @@
-# 归归 / GuiGui - Ehentai MangaAuthorSorter
+# 归归 / GuiGui - Ehentai MangaAuthorSorte![](D:\项目\归档工具\GuiGui-MangaAuthorSorter\Assets\AppIcon256.png)
 
-![软件截图](Assets/AppIcon256.png)如果你和我一样喜欢把作者按名字进行文件夹归档，那么归归非常适合你。
+[绿色下载](https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases)  [https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases](https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases)
+
+## 归归黄淡思，逐郎还去来；归归黄淡思，逐郎何处索
+
+如果你和我一样喜欢把作者按名字进行文件夹归档，那么归归非常适合你。
 
 归归面向 Windows 的漫画作者与社团识别归档工具。归归会先扫描和识别文件名，再提供整理预览；只有经过确认后才会移动文件。软件识别规则基本基于Ehentai的下载默认名字，个别可能需要自行调整。软件内不提供任何下载，只基于本地文件进行归档整理。
 
@@ -21,6 +25,12 @@
 4. 处理待确认项目，确认无误后执行整理。
 
 ![软件截图](Assets/README/001.png)
+
+![002.png](D:\项目\归档工具\GuiGui-MangaAuthorSorter\Assets\README\002.png)
+
+![003.png](D:\项目\归档工具\GuiGui-MangaAuthorSorter\Assets\README\003.png)
+
+
 
 涉及大量文件时，建议先用少量文件验证规则，并保留必要备份。
 
