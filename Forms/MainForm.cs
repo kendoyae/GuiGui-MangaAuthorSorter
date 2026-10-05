@@ -2576,8 +2576,10 @@ namespace MangaAuthorSorter
             }
 
             string message;
-            if (result.Status == UpdateCheckStatus.UpToDate || result.Status == UpdateCheckStatus.DevelopmentVersion)
-                message = String.Format(L("Update.UpToDate"), AppVersion.Display);
+            if (result.Status == UpdateCheckStatus.UpToDate)
+                message = String.Format(L("Update.UpToDate"), AppVersion.Display, "V" + result.LatestVersion);
+            else if (result.Status == UpdateCheckStatus.DevelopmentVersion)
+                message = String.Format(L("Update.DevelopmentVersion"), AppVersion.Display, "V" + result.LatestVersion);
             else if (result.Status == UpdateCheckStatus.NoRelease)
                 message = L("Update.NoRelease");
             else if (result.Status == UpdateCheckStatus.Timeout)

@@ -9,9 +9,10 @@ namespace MangaAuthorSorter
 {
     internal sealed class UpdateService
     {
-        public const string RepositoryUrl = "https://github.com/kendoyae/GuiGui-MangaAuthorSorter";
+        public const string RepositoryUrl = "https://github.com/kendoyae/GuiGui-Releases";
         public const string ReleasesUrl = RepositoryUrl + "/releases";
-        public const string LatestReleaseApiUrl = "https://api.github.com/repos/kendoyae/GuiGui-MangaAuthorSorter/releases/latest";
+        public const string RepositoryApiUrl = "https://api.github.com/repos/kendoyae/GuiGui-Releases";
+        public const string LatestReleaseApiUrl = "https://api.github.com/repos/kendoyae/GuiGui-Releases/releases/latest";
 
         public Task<UpdateCheckResult> CheckAsync()
         {
@@ -24,12 +25,13 @@ namespace MangaAuthorSorter
             result.CurrentVersion = AppVersion.Current;
             try
             {
-                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(LatestReleaseApiUrl);
-                request.Method = "GET";
-                request.Accept = "application/vnd.github+json";
-                request.UserAgent = "GuiGui-MangaAuthorSorter/" + AppVersion.UserAgentVersion;
-                request.Timeout = 8000;
-                request.ReadWriteTimeout = 8000;
+                // GitHub API requires TLS 1.2.  Older Windows/.NET Framework
+                // configurations may otherwise negotiate an obsolete protocol
+                // and report a misleading generic network failure.
+                ServicePointManager.SecurityProtocol =
+                    ServicePointManager.SecurityProtocol | SecurityProtocolType.Tls12;
+
+                HttpWebRequest request = CreateRequest(LatestReleaseApiUrl);
 
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
                 using (Stream stream = response.GetResponseStream())
@@ -66,7 +68,14 @@ namespace MangaAuthorSorter
             {
                 HttpWebResponse response = ex.Response as HttpWebResponse;
                 if (response != null && response.StatusCode == HttpStatusCode.NotFound)
-                    result.Status = UpdateCheckStatus.NoRelease;
+                {
+                    // GitHub also returns 404 for a missing/private/inaccessible
+                    // repository.  Only report "no release" after independently
+                    // proving that the repository itself is publicly accessible.
+                    result.Status = IsRepositoryAccessible()
+                        ? UpdateCheckStatus.NoRelease
+                        : UpdateCheckStatus.NetworkError;
+                }
                 else if (ex.Status == WebExceptionStatus.Timeout)
                     result.Status = UpdateCheckStatus.Timeout;
                 else
@@ -77,6 +86,31 @@ namespace MangaAuthorSorter
                 result.Status = UpdateCheckStatus.InvalidResponse;
             }
             return result;
+        }
+
+        private static HttpWebRequest CreateRequest(string url)
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = "GET";
+            request.Accept = "application/vnd.github+json";
+            request.UserAgent = "GuiGui-MangaAuthorSorter/" + AppVersion.UserAgentVersion;
+            request.Headers["X-GitHub-Api-Version"] = "2022-11-28";
+            request.Timeout = 8000;
+            request.ReadWriteTimeout = 8000;
+            return request;
+        }
+
+        private static bool IsRepositoryAccessible()
+        {
+            try
+            {
+                using (HttpWebResponse response = (HttpWebResponse)CreateRequest(RepositoryApiUrl).GetResponse())
+                    return response.StatusCode == HttpStatusCode.OK;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         internal static bool TryParseVersion(string text, out Version version)

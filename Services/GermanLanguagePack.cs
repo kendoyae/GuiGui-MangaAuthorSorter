@@ -349,7 +349,8 @@ namespace MangaAuthorSorter
             d["Update.NoNotes"] = "Für diese Version sind keine Hinweise verfügbar.";
             d["Update.Download"] = "Zum Download";
             d["Update.Later"] = "Später";
-            d["Update.UpToDate"] = "Sie verwenden bereits die neueste Version.\r\nAktuelle Version: {0}";
+            d["Update.UpToDate"] = "Sie verwenden bereits die neueste Version.\r\nAktuelle Version: {0}\r\nÖffentliche Version: {1}";
+            d["Update.DevelopmentVersion"] = "Ihre Version ist neuer als die öffentliche Version.\r\nAktuelle Version: {0}\r\nÖffentliche Version: {1}";
             d["Update.NoRelease"] = "Derzeit ist keine offizielle Version verfügbar.";
             d["Update.Unavailable"] = "Updates können momentan nicht geprüft werden. Bitte später erneut versuchen.";
             d["Update.Timeout"] = "Die Updateprüfung hat zu lange gedauert. Bitte später erneut versuchen.";
