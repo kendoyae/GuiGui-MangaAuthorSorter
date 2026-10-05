@@ -9,10 +9,10 @@ namespace MangaAuthorSorter
 {
     internal sealed class UpdateService
     {
-        public const string RepositoryUrl = "https://github.com/kendoyae/GuiGui-Releases";
+        public const string RepositoryUrl = "https://github.com/kendoyae/GuiGui-MangaAuthorSorter";
         public const string ReleasesUrl = RepositoryUrl + "/releases";
-        public const string RepositoryApiUrl = "https://api.github.com/repos/kendoyae/GuiGui-Releases";
-        public const string LatestReleaseApiUrl = "https://api.github.com/repos/kendoyae/GuiGui-Releases/releases/latest";
+        public const string RepositoryApiUrl = "https://api.github.com/repos/kendoyae/GuiGui-MangaAuthorSorter";
+        public const string LatestReleaseApiUrl = "https://api.github.com/repos/kendoyae/GuiGui-MangaAuthorSorter/releases/latest";
 
         public Task<UpdateCheckResult> CheckAsync()
         {
