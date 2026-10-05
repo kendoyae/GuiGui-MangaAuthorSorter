@@ -1,0 +1,98 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>MangaAuthorSorter</RootNamespace>
+    <AssemblyName>MangaAuthorSorter</AssemblyName>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="AppFiles.cs" />
+    <Compile Include="Core\Models.cs" />
+    <Compile Include="Core\AuthorRules.cs" />
+    <Compile Include="Core\TagCleaningRules.cs" />
+    <Compile Include="Core\ScanExclusionRules.cs" />
+    <Compile Include="Core\AuthorFolderNaming.cs" />
+    <Compile Include="Core\FileTypeRules.cs" />
+    <Compile Include="Core\GroupNaming.cs" />
+    <Compile Include="Core\ArchiveEngine.cs" />
+    <Compile Include="Core\ExecutionSafety.cs" />
+    <Compile Include="Core\ScanModeRules.cs" />
+    <Compile Include="Core\ScanPerformanceDiagnostics.cs" />
+    <Compile Include="Services\FileTypeProfileStore.cs" />
+    <Compile Include="Services\AliasLibrary.cs" />
+    <Compile Include="Services\AuthorEntityStore.cs" />
+    <Compile Include="Services\OnlineAuthorProvider.cs" />
+    <Compile Include="Services\BlockListStore.cs" />
+    <Compile Include="Services\UserSettingsStore.cs" />
+    <Compile Include="Services\LanguageManager.cs" />
+    <Compile Include="Services\EverythingService.cs" />
+    <Compile Include="Services\ScanWarmupService.cs" />
+    <Compile Include="Services\GermanLanguagePack.cs" />
+    <Compile Include="Services\HistoryStore.cs" />
+    <Compile Include="UI\FastDataGridView.cs" />
+    <Compile Include="UI\GridInteraction.cs" />
+    <Compile Include="UI\RecognitionVisual.cs" />
+    <Compile Include="UI\UiStyle.cs" />
+    <Compile Include="UI\UiMessageBox.cs" />
+    <Compile Include="Forms\HistoryForm.cs" />
+    <Compile Include="Forms\ArchiveSettingsForm.cs" />
+    <Compile Include="Forms\OnlineAuthorSettingsForm.cs" />
+    <Compile Include="Forms\TagCleaningRulesForm.cs" />
+    <Compile Include="Forms\ScanExclusionRulesForm.cs" />
+    <Compile Include="Forms\AliasManagerForm.cs" />
+    <Compile Include="Forms\BlockListManagerForm.cs" />
+    <Compile Include="Forms\FileTypeProfileManagerForm.cs" />
+    <Compile Include="Forms\LanguagePackCheckForm.cs" />
+    <Compile Include="Forms\AboutForm.cs" />
+    <Compile Include="Forms\LicenseForm.cs" />
+    <Compile Include="Forms\SupportForm.cs" />
+    <Compile Include="Forms\ExecutionConfirmDialog.cs" />
+    <Compile Include="Forms\ExecutionReviewDialog.cs" />
+    <Compile Include="Forms\ScanPerformanceForm.cs" />
+    <Compile Include="Forms\MainForm.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Languages\zh-CN.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="Languages\en-US.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="Languages\de-DE.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="Languages\_template.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="Languages\README.txt"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="Assets\*.*" Exclude="Assets\AppIcon.ico;Assets\AppIcon64.png"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <EmbeddedResource Include="Assets\AppIcon.ico">
+      <LogicalName>MangaAuthorSorter.AppIcon.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Assets\AppIcon64.png">
+      <LogicalName>MangaAuthorSorter.AppIcon64.png</LogicalName>
+    </EmbeddedResource>
+    <Content Include="LICENSE_NOTICES.txt"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <None Include="README.txt" />
+    <None Include="CHANGELOG.md" />
+    <None Include="RELEASE_BUILD_README.txt" />
+    <None Include="BUILD_EXE.cmd" />
+    <None Include="MAKE_RELEASE.cmd" />
+    <None Include="START.cmd" />
+    <None Include="Build\CompilerSources.rsp" />
+    <None Include="Docs\*.md" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

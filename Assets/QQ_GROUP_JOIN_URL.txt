@@ -1,0 +1,8 @@
+﻿# 归归反馈 QQ 群直接加入链接
+# 群号：1103654612
+#
+# QQ 客户端协议不可用时，程序使用下面的官方网页地址回退。
+# 程序本身也内置同一地址作为兜底；
+# 如未来 QQ 群邀请链接失效，可直接替换本文件中的链接，无需修改程序代码。
+
+http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=fyelXxwKBK21nb7oyCsZBdtZN7ldEzRJ&authKey=N%2FrBIUpHX09uz9sJagQyCzDvRu4d1XAOELBkI5Plp6qCWN7c0rdp496yhMBH3yV1&noverify=0&group_code=1103654612
