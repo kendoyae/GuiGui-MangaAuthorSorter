@@ -47,7 +47,7 @@ namespace MangaAuthorSorter
             _enabled.CheckedChanged += SettingsChanged; _warmup.CheckedChanged += SettingsChanged; _everything.CheckedChanged += SettingsChanged;
             switchCard.Controls.Add(switches); switchCard.Controls.Add(_state); UpdateState();
 
-            _grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
+            _grid = new FastDataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
                 AllowUserToResizeRows = false, MultiSelect = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 ClipboardCopyMode = DataGridViewClipboardCopyMode.EnableAlwaysIncludeHeaderText, Margin = new Padding(0, 0, 0, 12) };
             _grid.Columns.Add("Time", L("Performance.Column.Time")); _grid.Columns.Add("Provider", L("Performance.Column.Provider"));
@@ -57,6 +57,7 @@ namespace MangaAuthorSorter
             UiStyle.StyleGrid(_grid); UiStyle.ConfigureShortColumn(_grid.Columns[0], 115); UiStyle.ConfigureFillColumn(_grid.Columns[1], 130, 150);
             UiStyle.ConfigureShortColumn(_grid.Columns[2], 75); UiStyle.ConfigureShortColumn(_grid.Columns[3], 95);
             UiStyle.ConfigureShortColumn(_grid.Columns[4], 80); UiStyle.ConfigureShortColumn(_grid.Columns[5], 105); UiStyle.ConfigureFillColumn(_grid.Columns[6], 90, 120);
+            GridInteraction.Apply(_grid, "ScanPerformance", _language, false);
             _grid.SelectionChanged += delegate { ShowSelectedDetail(); };
             ContextMenuStrip menu = new ContextMenuStrip();
             ToolStripMenuItem copyMenu = new ToolStripMenuItem(L("Performance.CopySelected")); copyMenu.Click += delegate { CopySelected(); }; menu.Items.Add(copyMenu); UiStyle.StyleMenu(menu); _grid.ContextMenuStrip = menu;

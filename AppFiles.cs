@@ -9,7 +9,6 @@ namespace MangaAuthorSorter
         public const string ExclusionList = "ExclusionList.txt";
         public const string UserSettings = "UserSettings.ini";
         public const string FileTypeProfiles = "FileTypeProfiles.json";
-        public const string Readme = "README.txt";
         public const string History = "History.json";
         public const string GridLayouts = "GridLayouts.ini";
         public const string AuthorEntities = "AuthorEntities.json";
@@ -62,15 +61,5 @@ namespace MangaAuthorSorter
             return currentPath;
         }
 
-        public static string ResolveReadme(string appDir)
-        {
-            string currentPath = Path.Combine(appDir, Readme);
-            if (File.Exists(currentPath))
-                return currentPath;
-
-            // Compatibility with V1.8.3 and earlier portable folders.
-            string legacyPath = Path.Combine(appDir, "使用说明.txt");
-            return File.Exists(legacyPath) ? legacyPath : currentPath;
-        }
     }
 }

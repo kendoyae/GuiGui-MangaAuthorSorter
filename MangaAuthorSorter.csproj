@@ -5,7 +5,7 @@
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <OutputType>WinExe</OutputType>
     <RootNamespace>MangaAuthorSorter</RootNamespace>
-    <AssemblyName>MangaAuthorSorter</AssemblyName>
+    <AssemblyName>GuiGui</AssemblyName>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
@@ -50,6 +50,7 @@
     <Compile Include="Services\EverythingService.cs" />
     <Compile Include="Services\ScanWarmupService.cs" />
     <Compile Include="Services\UpdateService.cs" />
+    <Compile Include="Services\EmbeddedResourceService.cs" />
     <Compile Include="Services\GermanLanguagePack.cs" />
     <Compile Include="Services\HistoryStore.cs" />
     <Compile Include="UI\FastDataGridView.cs" />
@@ -68,6 +69,7 @@
     <Compile Include="Forms\LanguagePackCheckForm.cs" />
     <Compile Include="Forms\AboutForm.cs" />
     <Compile Include="Forms\UpdateDialog.cs" />
+    <Compile Include="Forms\TextResourceForm.cs" />
     <Compile Include="Forms\LicenseForm.cs" />
     <Compile Include="Forms\SupportForm.cs" />
     <Compile Include="Forms\ExecutionConfirmDialog.cs" />
@@ -88,9 +90,22 @@
     <EmbeddedResource Include="Assets\AppIcon64.png">
       <LogicalName>MangaAuthorSorter.AppIcon64.png</LogicalName>
     </EmbeddedResource>
-    <Content Include="LICENSE_NOTICES.txt"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <EmbeddedResource Include="Assets\SupportWeChat.png">
+      <LogicalName>MangaAuthorSorter.SupportWeChat.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Assets\SupportAlipay.png">
+      <LogicalName>MangaAuthorSorter.SupportAlipay.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="README.txt">
+      <LogicalName>MangaAuthorSorter.Readme.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="LICENSE_NOTICES.txt">
+      <LogicalName>MangaAuthorSorter.LicenseNotices.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="CHANGELOG.md">
+      <LogicalName>MangaAuthorSorter.Changelog.md</LogicalName>
+    </EmbeddedResource>
     <None Include="README.txt" />
-    <None Include="CHANGELOG.md" />
     <None Include="RELEASE_BUILD_README.txt" />
     <None Include="BUILD_EXE.cmd" />
     <None Include="MAKE_RELEASE.cmd" />

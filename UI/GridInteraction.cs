@@ -9,8 +9,8 @@ namespace MangaAuthorSorter
 {
     /// <summary>
     /// 统一 DataGridView 的多语言列宽交互：
-    /// - 保留页面声明的 AllCells / Fill / None 策略；
-    /// - 短枚举列可按当前语言自动宽度，长文本列使用 Fill；
+    /// - 自动宽度只用于计算初始像素宽度，之后全部冻结为 None；
+    /// - 拖动一列只改变该列，不强制其他列补齐右侧空间；
     /// - 表头与普通单元格默认禁止换行；
     /// - 空间不足时优先压缩 Fill 列并允许横向滚动；
     /// - 支持表头右键“自动调整列宽 / 恢复默认列宽 / 显示隐藏列”；
@@ -88,6 +88,12 @@ namespace MangaAuthorSorter
 
             foreach (DataGridViewColumn column in grid.Columns)
             {
+                if (column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+                {
+                    int width = Math.Max(column.MinimumWidth, column.Width);
+                    column.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+                    column.Width = width;
+                }
                 if (column.AutoSizeMode == DataGridViewAutoSizeColumnMode.NotSet)
                     column.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
                 column.Resizable = DataGridViewTriState.True;
@@ -114,10 +120,10 @@ namespace MangaAuthorSorter
                 SaveGridState(controller);
             };
 
-            // AllCells/DisplayedCells calculate a useful initial width but WinForms
+            // Automatic modes calculate a useful initial width but WinForms
             // locks those columns against mouse resizing. After initial population,
             // freeze the measured pixel widths to None so every list column can be
-            // dragged and persisted. Fill columns already support mouse resizing.
+            // dragged independently and persisted.
             controller.UnlockTimer = new Timer();
             controller.UnlockTimer.Interval = 50;
             controller.UnlockTimer.Tick += delegate

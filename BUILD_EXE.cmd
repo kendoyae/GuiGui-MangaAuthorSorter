@@ -25,13 +25,20 @@ if not exist "Build\CompilerSources.rsp" (
     exit /b 1
 )
 
-echo Building MangaAuthorSorter.exe...
+if not exist "bin\Release" mkdir "bin\Release"
+
+echo Building GuiGui.exe...
 
 "%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ ^
- /out:"MangaAuthorSorter.exe" ^
+ /out:"bin\Release\GuiGui.exe" ^
  /win32icon:"Assets\AppIcon.ico" ^
  /resource:"Assets\AppIcon.ico",MangaAuthorSorter.AppIcon.ico ^
  /resource:"Assets\AppIcon64.png",MangaAuthorSorter.AppIcon64.png ^
+ /resource:"Assets\SupportWeChat.png",MangaAuthorSorter.SupportWeChat.png ^
+ /resource:"Assets\SupportAlipay.png",MangaAuthorSorter.SupportAlipay.png ^
+ /resource:"README.txt",MangaAuthorSorter.Readme.txt ^
+ /resource:"LICENSE_NOTICES.txt",MangaAuthorSorter.LicenseNotices.txt ^
+ /resource:"CHANGELOG.md",MangaAuthorSorter.Changelog.md ^
  /reference:System.dll ^
  /reference:System.Core.dll ^
  /reference:System.Drawing.dll ^
@@ -52,7 +59,7 @@ if errorlevel 1 (
 
 echo.
 echo [OK] Generated:
-echo %CD%\MangaAuthorSorter.exe
+echo %CD%\bin\Release\GuiGui.exe
 echo.
 if not defined NO_PAUSE pause
 exit /b 0

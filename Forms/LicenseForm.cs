@@ -1,7 +1,5 @@
 using System;
-using System.Diagnostics;
 using System.Drawing;
-using System.IO;
 using System.Windows.Forms;
 
 namespace MangaAuthorSorter
@@ -9,7 +7,6 @@ namespace MangaAuthorSorter
     internal sealed class LicenseForm : Form
     {
         private readonly LanguageManager _language;
-        private readonly string _appDir;
         private readonly ListBox _sections;
         private readonly Label _sectionTitle;
         private readonly RichTextBox _sectionBody;
@@ -36,10 +33,9 @@ namespace MangaAuthorSorter
             "License.Body.Network"
         };
 
-        public LicenseForm(LanguageManager language, Font appFont, string appDir)
+        public LicenseForm(LanguageManager language, Font appFont)
         {
             _language = language;
-            _appDir = appDir ?? "";
 
             UiStyle.ApplyDialog(this, appFont);
             Text = language.Get("License.Title");
@@ -212,21 +208,9 @@ namespace MangaAuthorSorter
 
         private void OpenNoticeFile()
         {
-            string path = Path.Combine(_appDir, "LICENSE_NOTICES.txt");
-            if (!File.Exists(path))
-            {
-                UiMessageBox.Show(this, _language.Get("License.NoticeMissing"), _language.Get("License.Title"), MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            try
-            {
-                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-            }
-            catch (Exception ex)
-            {
-                UiMessageBox.Show(this, ex.Message, _language.Get("Common.Error.OpenFailed"), MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            string content = EmbeddedResourceService.ReadText(EmbeddedResourceService.LicenseNotices);
+            using (TextResourceForm dlg = new TextResourceForm(_language, Font, _language.Get("License.Title"), content))
+                dlg.ShowDialog(this);
         }
     }
 }

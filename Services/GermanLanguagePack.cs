@@ -10,8 +10,8 @@ namespace MangaAuthorSorter
             Dictionary<string, string> d =
                 new Dictionary<string, string>(StringComparer.Ordinal);
 
-            d["App.Title"] = "MangaAuthorSorter";
-            d["App.Name"] = "MangaAuthorSorter";
+            d["App.Title"] = "GuiGui";
+            d["App.Name"] = "GuiGui";
             d["Common.Browse"] = "Durchsuchen...";
             d["Common.Save"] = "Speichern";
             d["Common.Cancel"] = "Abbrechen";
@@ -22,11 +22,11 @@ namespace MangaAuthorSorter
             d["Common.Error.SaveFailed"] = "Speichern fehlgeschlagen";
             d["Common.NotSet"] = "Nicht festgelegt";
             d["Common.EmptyValue"] = "—";
-            d["DataFile.AuthorAliases.Title"] = "MangaAuthorSorter – Autorenaliasse";
+            d["DataFile.AuthorAliases.Title"] = "GuiGui – Autorenaliasse";
             d["DataFile.AuthorAliases.Format"] = "Format: Hauptautor|Alias1|Alias2|Alias3";
             d["DataFile.AuthorAliases.SameAuthor"] = "Nur bestätigte Namen desselben Autors in eine Zeile eintragen.";
             d["DataFile.AuthorAliases.AutoUpdate"] = "Bei manueller Autorzuweisung wird diese Datei automatisch aktualisiert.";
-            d["DataFile.ExclusionList.Title"] = "MangaAuthorSorter – Ausschlussliste";
+            d["DataFile.ExclusionList.Title"] = "GuiGui – Ausschlussliste";
             d["DataFile.ExclusionList.PathRule"] = "Pro Zeile einen vollständigen Dateipfad eintragen.";
             d["DataFile.ExclusionList.Description"] = "Diese Dateien werden beim Scan übersprungen.";
             d["DataFile.ExclusionList.ManageHint"] = "Diese Datei am besten über „Ausschlussliste“ verwalten.";
@@ -40,13 +40,16 @@ namespace MangaAuthorSorter
             d["Action.HandleReviewCount"] = "Prüfen ({0})";
             d["Main.ScanCount"] = "Anzahl:";
             d["Main.ScanCountHint"] = "0 = alle; bei Filtern Zielanzahl; neu → alt";
+            d["Context.OpenFileLocation"] = "Dateipfad öffnen";
+            d["Context.CopyFullPath"] = "Vollständigen Pfad und Dateinamen kopieren";
+            d["Context.CopyFailed"] = "Kopieren fehlgeschlagen";
             d["Main.Recursive"] = "Unterordner scannen";
             d["Main.FileType"] = "Dateityp:";
-            d["Main.OperationHint"] = "Tipp: Dateiname doppelklicken zum Umbenennen; Erkennungsgrund doppelklicken zur Autorzuweisung; Entf entfernt nur aus der Vorschau. Änderungen bleiben bis zum nächsten Scan sichtbar.";
+            d["Main.OperationHint"] = "Tipp: Dateiname zum Umbenennen doppelklicken; bei Mehrdeutigkeit den Status doppelklicken und den Autor wählen; Entf entfernt nur aus der Vorschau.";
             d["Main.InitialStatus"] = "Schritt 1: Quellordner wählen.";
             d["Status.GuideSelectSource"] = "Schritt 1: Quellordner wählen.";
             d["Status.GuideSelectTarget"] = "Schritt 2: Zielordner wählen.";
-            d["Status.GuideScanPreview"] = "Weiter: „Scannen“ starten.";
+            d["Status.GuideScanPreview"] = "Schritt 3: „Scanvorschau“ starten.";
             d["Main.ExecutionProgress"] = "Fortschritt";
             d["Main.Waiting"] = "Bereit.";
             d["Main.TargetPrefix"] = "Ziel:";
@@ -88,7 +91,7 @@ namespace MangaAuthorSorter
             d["Filter.Ambiguous"] = "Mehrdeutig";
             d["Filter.Unrecognized"] = "Unerkannt";
             d["Filter.ViewLabel"] = "Ansicht:";
-            d["Filter.Search"] = "Suche:";
+            d["Filter.Search"] = "Filter:";
             d["Details.Title"] = "Verarbeitung";
             d["Details.Empty"] = "Datei wählen, um Verarbeitung und nötige Schritte zu sehen.";
             d["Details.Multiple"] = "{0} Dateien gewählt. Stapelaktionen per Kontextmenü.";
@@ -136,6 +139,7 @@ namespace MangaAuthorSorter
             d["Menu.CheckLanguagePacks"] = "Sprachpakete prüfen...";
             d["Menu.Help"] = "Hilfe (&H)";
             d["Menu.Readme"] = "Anleitung";
+            d["Menu.Changelog"] = "Versionshinweise";
             d["Menu.CheckUpdates"] = "Nach Updates suchen";
             d["Menu.UpdateAvailable"] = "Neue Version {0} verfügbar";
             d["Menu.About"] = "Info";
@@ -323,9 +327,9 @@ namespace MangaAuthorSorter
             d["Validation.ExtensionNotAllowed"] = "Die neue Endung muss zum aktuellen Dateityp gehören.\r\nProfil: {0}\r\nErlaubt: {1}";
             d["Validation.SourceGone"] = "Quelldatei fehlt.";
             d["Validation.DuplicateFile"] = "Gleichnamige Datei im Ordner vorhanden: {0}";
-            d["About.Title"] = "Über MangaAuthorSorter";
-            d["About.Body"] = "GuiGui / MangaAuthorSorter\r\nEntwickler: kendo";
-            d["About.ProductName"] = "GuiGui / MangaAuthorSorter";
+            d["About.Title"] = "Über GuiGui";
+            d["About.Body"] = "GuiGui\r\nEntwickler: kendo";
+            d["About.ProductName"] = "GuiGui";
             d["About.Tagline"] = "Manga-Autoren erkennen und sortieren";
             d["About.Author"] = "Entwickler:";
             d["About.Version"] = "Version:";
@@ -593,6 +597,18 @@ namespace MangaAuthorSorter
             d["Dialog.TagCleaning.RuleName.ComicMarket"] = "Comic-Market-Nummer";
             d["Dialog.TagCleaning.RuleName.Comitia"] = "COMITIA-Nummer";
             d["Dialog.TagCleaning.RuleName.ComicNumber"] = "COMIC-Nummer";
+            d["Dialog.TagCleaning.RuleName.Puniket"] = "Puniket-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.FFEvent"] = "FF-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.SCEvent"] = "SC-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.Suncre"] = "Suncre-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.AirComiket"] = "Air-Comiket-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.ComicOne"] = "COMIC1-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.KansaiComitia"] = "Kansai-COMITIA-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.ComicTreasure"] = "Comic-Treasure-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.ToraFestival"] = "Tora-Festival-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.CSPEvent"] = "CSP-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.Reitaisai"] = "Reitaisai-Veranstaltungsnummer";
+            d["Dialog.TagCleaning.RuleName.RagnaFestival"] = "Ragna-Festival-Veranstaltungsnummer";
             d["Dialog.TagCleaning.RuleDescription"] = "Beschreibung";
             d["Dialog.TagCleaning.VisualRuleType"] = "Regeltyp";
             d["Dialog.TagCleaning.RuleParameters"] = "Parameter";
@@ -742,9 +758,9 @@ namespace MangaAuthorSorter
             d["License.Section.External"] = "Externe Plattformen";
             d["License.Section.Network"] = "Netzwerkzugriff";
             d["License.Body.Application"] = "Copyright © 2026 kendo.\r\n\r\nDiese Ausgabe enthält keine separate Open-Source-Lizenz. Sofern einer Veröffentlichung keine andere Lizenz beiliegt, behält kendo alle Rechte vor.";
-            d["License.Body.Everything"] = "MangaAuthorSorter kann optional die offizielle Everything-SDK-Schnittstelle zur schnelleren Dateisuche nutzen. Ist das SDK nicht verfügbar, wird normal über das Dateisystem gescannt.\r\n\r\nEverything und das Everything SDK werden von David Carpenter / voidtools entwickelt und sind unabhängige Drittsoftware. MangaAuthorSorter ist weder mit voidtools verbunden noch von voidtools unterstützt.\r\n\r\nhttps://www.voidtools.com/\r\nhttps://www.voidtools.com/support/everything/sdk/";
-            d["License.Body.Danbooru"] = "Bei aktivierter Online-Autorensuche kann MangaAuthorSorter Autorennamen an die öffentliche Danbooru-API senden und öffentliche Antworten lesen.\r\n\r\nDanbooru ist ein unabhängiger Drittanbieter und weder mit MangaAuthorSorter verbunden noch dessen Unterstützer.\r\n\r\nhttps://danbooru.donmai.us/";
-            d["License.Body.Microsoft"] = "MangaAuthorSorter ist eine Windows-Desktopanwendung und nutzt System-APIs bzw. Laufzeitkomponenten von Microsoft Windows und .NET Framework.\r\n\r\nMicrosoft, Windows und .NET sowie zugehörige Marken gehören ihren jeweiligen Inhabern.";
+            d["License.Body.Everything"] = "GuiGui kann optional die offizielle Everything-SDK-Schnittstelle zur schnelleren Dateisuche nutzen. Ist das SDK nicht verfügbar, wird normal über das Dateisystem gescannt.\r\n\r\nEverything und das Everything SDK werden von David Carpenter / voidtools entwickelt und sind unabhängige Drittsoftware. GuiGui ist weder mit voidtools verbunden noch von voidtools unterstützt.\r\n\r\nhttps://www.voidtools.com/\r\nhttps://www.voidtools.com/support/everything/sdk/";
+            d["License.Body.Danbooru"] = "Bei aktivierter Online-Autorensuche kann GuiGui Autorennamen an die öffentliche Danbooru-API senden und öffentliche Antworten lesen.\r\n\r\nDanbooru ist ein unabhängiger Drittanbieter und weder mit GuiGui verbunden noch dessen Unterstützer.\r\n\r\nhttps://danbooru.donmai.us/";
+            d["License.Body.Microsoft"] = "GuiGui ist eine Windows-Desktopanwendung und nutzt System-APIs bzw. Laufzeitkomponenten von Microsoft Windows und .NET Framework.\r\n\r\nMicrosoft, Windows und .NET sowie zugehörige Marken gehören ihren jeweiligen Inhabern.";
             d["License.Body.External"] = "Externe Links wie GitHub, QQ, Afdian, Ko-fi, voidtools und Danbooru dienen Projektzugriff, Feedback, Unterstützung oder optionalen Funktionen.\r\n\r\nNamen, Marken, Inhalte und Dienste gehören ihren jeweiligen Inhabern.";
             d["License.Body.Network"] = "Lokales Scannen und Sortieren benötigen keinen dauerhaften Netzwerkzugriff.\r\n\r\nNetzwerkzugriffe oder das Öffnen externer Apps/Browser erfolgen nur bei optionalen Funktionen wie Online-Autorensuche, Everything-SDK-Bezug oder Projekt-/Feedback-/Supportlinks.";
             d["Menu.PerformanceDiagnostics"] = "Leistungsdiagnose";
@@ -769,7 +785,7 @@ namespace MangaAuthorSorter
             d["Performance.Copy"] = "Diagnose kopieren";
             d["Performance.Clear"] = "Einträge löschen";
             d["Performance.OpenLog"] = "Protokollordner öffnen";
-            d["Performance.ReportTitle"] = "MangaAuthorSorter-Leistungsdiagnose";
+            d["Performance.ReportTitle"] = "GuiGui-Leistungsdiagnose";
             d["Performance.Version"] = "Version";
             d["Performance.Time"] = "Zeit";
             d["Performance.Provider"] = "Scan-Anbieter";

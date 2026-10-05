@@ -1,4 +1,4 @@
-归归 / MangaAuthorSorter V1.11.24｜一键分发构建说明
+归归 / GuiGui V1.11.29｜一键分发构建说明
 ================================================
 
 在 Windows 上解压源码包后，可直接双击：
@@ -7,18 +7,18 @@ MAKE_RELEASE.cmd
 
 它会：
 1. 读取 Build\CompilerSources.rsp 中的统一源码清单
-2. 编译 MangaAuthorSorter.exe
+2. 编译到 bin\Release\GuiGui.exe
 3. 创建 RELEASE 文件夹
 4. 生成 Single_EXE 与 Portable 两种分发目录
 
 单 EXE：
-RELEASE\Single_EXE\MangaAuthorSorter.exe
+RELEASE\Single_EXE\GuiGui.exe
 
 Portable：
 RELEASE\Portable\
 
-Portable 只包含普通用户运行所需内容：
-- MangaAuthorSorter.exe
+Portable 包保留以下方便用户浏览和自定义的附加文件；程序本身不依赖它们启动：
+- GuiGui.exe
 - README.txt
 - CHANGELOG.md
 - Languages\（含正式 zh-CN / en-US / de-DE）
@@ -41,7 +41,7 @@ V1.11.6 起，排除结果通过主界面“已排除”状态筛选查看；排
 UserSettings.ini 中 SafetyReserveGb 默认为 5 GB，可在“设置 → 归档设置”修改。
 
 在线作者解析默认关闭；启用后需要网络连接，当前兼容数据源仍为 Danbooru。
-E-Hentai Provider 不在 V1.11.24 接入范围内，后续版本单独处理。
+E-Hentai Provider 不在 V1.11.28 接入范围内，后续版本单独处理。
 网络不可用时本地扫描/归档仍可继续。
 
 Everything64.dll / Everything32.dll 不是强制文件。
@@ -51,8 +51,8 @@ Everything SDK 不可用时，程序会自动回退到文件系统扫描。
 目标 Windows 需要兼容的 .NET Framework 4.x 运行环境。
 
 支持项目资源：
-- Portable 会复制 Assets 目录。
-- 可选二维码文件：Assets\SupportWeChat.png、Assets\SupportAlipay.png。
+- 微信与支付宝二维码、使用说明、更新说明和许可证全文均已内嵌到 EXE。
+- 单 EXE 目录无需复制 Assets、README.txt、CHANGELOG.md 或 LICENSE_NOTICES.txt。
 - QQ 反馈群直达配置：Assets\QQ_GROUP_JOIN_URL.txt。
 - 缺失二维码不会影响运行；QQ 直达链接未配置时只复制群号，不调用 mqqapi。
 

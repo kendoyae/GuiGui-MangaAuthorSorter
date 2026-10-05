@@ -1,5 +1,7 @@
 ﻿# 工程结构说明
 
+完整的当前工程说明见 `Docs/DEVELOPMENT.md`。本文保留目录拆分的设计背景与源码清单维护规则。
+
 V1.11.9 起，项目按“职责”而不是版本或功能历史拆分目录。命名空间继续使用 `MangaAuthorSorter`，本次整理不改变运行逻辑。
 
 ## 根目录
@@ -7,10 +9,12 @@ V1.11.9 起，项目按“职责”而不是版本或功能历史拆分目录。
 - `Program.cs`：应用入口。
 - `AppFiles.cs`：应用级文件/目录定位。
 - `MangaAuthorSorter.csproj`：Visual Studio / MSBuild 项目。
-- `BUILD_EXE.cmd`：直接使用 .NET Framework csc 编译。
+- `BUILD_EXE.cmd`：直接使用 .NET Framework csc 编译，统一输出到 `bin/Release/GuiGui.exe`。
 - `MAKE_RELEASE.cmd`：生成用户分发目录。
 - `START.cmd`：本地快速启动。
-- `README.txt` / `CHANGELOG.md`：用户说明与版本记录。
+- `README.md`：GitHub 项目首页与用户快速说明。
+- `README.txt`：程序内嵌使用说明。
+- `CHANGELOG.md`：版本更新记录，并同时内嵌到程序“更新说明”。
 
 ## Core
 
@@ -50,6 +54,6 @@ V1.11.9 起，项目按“职责”而不是版本或功能历史拆分目录。
 `MAKE_RELEASE.cmd` 生成：
 
 - `RELEASE/Single_EXE/`：单 EXE；
-- `RELEASE/Portable/`：EXE + README + CHANGELOG + Languages。
+- `RELEASE/Portable/`：EXE + 便于外部阅读的 README / CHANGELOG + Languages。
 
-源码、Docs、Build、csproj 和构建脚本不进入用户 Portable 包。
+源码、Docs、Build、csproj 和构建脚本不进入用户 Portable 包。单 EXE 已包含运行所需的固定资源；Portable 中的文档与语言文件用于外部阅读和语言包维护，不是核心界面启动依赖。

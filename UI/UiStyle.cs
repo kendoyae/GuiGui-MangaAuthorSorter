@@ -321,8 +321,11 @@ namespace MangaAuthorSorter
         {
             if (column == null) return;
             column.MinimumWidth = Math.Max(60, minimumWidth);
-            column.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
-            column.FillWeight = Math.Max(1F, fillWeight);
+            // Use the declared/current width only as the initial size. Fill
+            // couples neighbouring columns together, so dragging one divider
+            // silently resizes another and prevents true WYSIWYG control.
+            column.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            column.Width = Math.Max(column.MinimumWidth, column.Width);
             column.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
             column.HeaderCell.Style.WrapMode = DataGridViewTriState.False;
         }

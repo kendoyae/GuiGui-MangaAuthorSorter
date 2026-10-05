@@ -23,6 +23,7 @@ Services\LanguageManager.cs
 Services\EverythingService.cs
 Services\ScanWarmupService.cs
 Services\UpdateService.cs
+Services\EmbeddedResourceService.cs
 Services\GermanLanguagePack.cs
 Services\HistoryStore.cs
 UI\FastDataGridView.cs
@@ -41,6 +42,7 @@ Forms\FileTypeProfileManagerForm.cs
 Forms\LanguagePackCheckForm.cs
 Forms\AboutForm.cs
 Forms\UpdateDialog.cs
+Forms\TextResourceForm.cs
 Forms\LicenseForm.cs
 Forms\SupportForm.cs
 Forms\ExecutionConfirmDialog.cs

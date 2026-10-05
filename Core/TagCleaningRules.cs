@@ -115,7 +115,7 @@ namespace MangaAuthorSorter
 
         public TagCleaningRuleConfig()
         {
-            Version = 3;
+            Version = 7;
             Rules = new List<TagCleaningRule>();
         }
     }
@@ -125,6 +125,9 @@ namespace MangaAuthorSorter
     // rename files, rewrite folder names, or perform fuzzy author matching.
     internal sealed class TagCleaningRuleStore
     {
+        private const int CurrentConfigVersion = 7;
+        private const string CombinedEventPattern = @"^(?:ぷに(?:ケット|けっと)\s*\d{1,4}|FF\s*\d{1,4}|SC\s*\d{1,4}|サンクリ(?:\s*\d{1,4}|\s*\d{4}\s+(?:Spring|Summer|Autumn|Winter))|エアコミケ\s*\d{1,4}|COMIC1\s*[☆★＊*]?\s*\d{1,4}|関西コミティア\s*\d{1,4})$";
+
         private sealed class CompiledRule
         {
             public string Type = TagCleaningMatchType.Exact;
@@ -239,6 +242,9 @@ namespace MangaAuthorSorter
             AddContains(rules, "Dialog.TagCleaning.RuleName.Language", "中国语", "中国语");
             AddContains(rules, "Dialog.TagCleaning.RuleName.TranslationGroup", "白杨汉化组", "白杨汉化组");
             AddContains(rules, "Dialog.TagCleaning.RuleName.TranslationGroup", "白楊漢化組", "白楊漢化組");
+            AddContains(rules, "Dialog.TagCleaning.RuleName.OtherMetadata", "成年コミック", "成年コミック");
+            AddContains(rules, "Dialog.TagCleaning.RuleName.OtherMetadata", "同人CG集", "同人CG集");
+            AddContains(rules, "Dialog.TagCleaning.RuleName.OtherMetadata", "Comic", "Comic");
 
             // Edition/source/status labels that are commonly placed in the
             // same [] prefix area as an author/circle tag.
@@ -280,6 +286,18 @@ namespace MangaAuthorSorter
             AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.ComicMarket", TagCleaningVisualRuleType.PrefixDigits, "C|コミケ", 1, 4, @"^(?:C|コミケ)\s*\d{1,4}$", "C97, C103, コミケ103");
             AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.Comitia", TagCleaningVisualRuleType.PrefixDigits, "COMITIA|コミティア", 1, 4, @"^(?:COMITIA|コミティア)\s*\d{1,4}$", "COMITIA145, コミティア150");
             AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.ComicNumber", TagCleaningVisualRuleType.PrefixDigits, "COMIC", 1, 4, @"^COMIC\s*\d{1,4}$", "COMIC 123");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.Puniket", TagCleaningVisualRuleType.PrefixDigits, "ぷにケット|ぷにけっと", 1, 4, @"^ぷに(?:ケット|けっと)\s*\d{1,4}$", "ぷにケット47, ぷにけっと38");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.FFEvent", TagCleaningVisualRuleType.PrefixDigits, "FF", 1, 4, @"^FF\s*\d{1,4}$", "FF18, FF41");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.SCEvent", TagCleaningVisualRuleType.PrefixDigits, "SC", 1, 4, @"^SC\s*\d{1,4}$", "SC61, SC46");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.Suncre", TagCleaningVisualRuleType.AdvancedRegex, "", 1, 4, @"^サンクリ(?:\s*\d{1,4}|\s*\d{4}\s+(?:Spring|Summer|Autumn|Winter))$", "サンクリ61, サンクリ2021 Summer");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.AirComiket", TagCleaningVisualRuleType.PrefixDigits, "エアコミケ", 1, 4, @"^エアコミケ\s*\d{1,4}$", "エアコミケ2, エアコミケ3");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.ComicOne", TagCleaningVisualRuleType.AdvancedRegex, "", 1, 4, @"^COMIC1\s*[☆★＊*]?\s*\d{1,4}$", "COMIC1☆14, COMIC1☆15");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.KansaiComitia", TagCleaningVisualRuleType.PrefixDigits, "関西コミティア", 1, 4, @"^関西コミティア\s*\d{1,4}$", "関西コミティア48");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.ComicTreasure", TagCleaningVisualRuleType.PrefixDigits, "こみトレ", 1, 4, @"^こみトレ\s*\d{1,4}$", "こみトレ14, こみトレ23, こみトレ40");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.ToraFestival", TagCleaningVisualRuleType.PrefixDigits, "とら祭り", 1, 4, @"^とら祭り\s*\d{1,4}$", "とら祭り2010");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.CSPEvent", TagCleaningVisualRuleType.PrefixDigits, "CSP", 1, 4, @"^CSP\s*\d{1,4}$", "CSP6");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.Reitaisai", TagCleaningVisualRuleType.PrefixDigits, "例大祭", 1, 4, @"^例大祭\s*\d{1,4}$", "例大祭8");
+            AddVisualRegex(rules, "Dialog.TagCleaning.RuleName.RagnaFestival", TagCleaningVisualRuleType.PrefixDigits, "ラグフェス", 1, 4, @"^ラグフェス\s*\d{1,4}$", "ラグフェス29");
 
             return rules;
         }
@@ -350,7 +368,30 @@ namespace MangaAuthorSorter
                     serializer.MaxJsonLength = Int32.MaxValue;
                     TagCleaningRuleConfig config = serializer.Deserialize<TagCleaningRuleConfig>(json);
                     if (config != null && config.Rules != null)
+                    {
                         rules = NormalizeRules(config.Rules);
+                        if (config.Version < CurrentConfigVersion)
+                        {
+                            if (config.Version < 4)
+                                AppendMissingRules(rules, GetVersion4AddedRules());
+                            if (config.Version < 5)
+                                ReplaceCombinedEventRule(rules);
+                            if (config.Version < 6)
+                                AppendMissingRules(rules, GetVersion6AddedRules());
+                            if (config.Version < 7)
+                                AppendMissingRules(rules, GetVersion7AddedRules());
+                            try
+                            {
+                                SaveInternal(rules);
+                                return;
+                            }
+                            catch
+                            {
+                                // A read-only portable folder can still use
+                                // the migrated rule set for this session.
+                            }
+                        }
+                    }
                 }
             }
             catch
@@ -371,7 +412,7 @@ namespace MangaAuthorSorter
         private void SaveInternal(List<TagCleaningRule> rules)
         {
             TagCleaningRuleConfig config = new TagCleaningRuleConfig();
-            config.Version = 3;
+            config.Version = CurrentConfigVersion;
             config.Rules = NormalizeRules(rules);
 
             JavaScriptSerializer serializer = new JavaScriptSerializer();
@@ -479,6 +520,80 @@ namespace MangaAuthorSorter
                 result.Add(rule);
             }
             return result;
+        }
+
+        private static List<TagCleaningRule> GetVersion4AddedRules()
+        {
+            List<TagCleaningRule> defaults = GetDefaultRules();
+            return defaults.Where(delegate(TagCleaningRule rule)
+            {
+                string pattern = rule.Pattern ?? "";
+                return String.Equals(pattern, "成年コミック", StringComparison.Ordinal) ||
+                       String.Equals(pattern, "同人CG集", StringComparison.Ordinal);
+            }).Select(delegate(TagCleaningRule rule) { return rule.Clone(); }).ToList();
+        }
+
+        private static void ReplaceCombinedEventRule(List<TagCleaningRule> rules)
+        {
+            TagCleaningRule combined = rules.FirstOrDefault(delegate(TagCleaningRule rule)
+            {
+                return String.Equals(TagCleaningMatchType.Normalize(rule.MatchType), TagCleaningMatchType.Regex, StringComparison.OrdinalIgnoreCase) &&
+                       String.Equals((rule.Pattern ?? "").Trim(), CombinedEventPattern, StringComparison.Ordinal);
+            });
+            bool enabled = combined == null || combined.Enabled;
+            if (combined != null) rules.Remove(combined);
+
+            List<TagCleaningRule> eventRules = GetDefaultRules().Where(delegate(TagCleaningRule rule)
+            {
+                string key = rule.NameKey ?? "";
+                return key == "Dialog.TagCleaning.RuleName.Puniket" ||
+                       key == "Dialog.TagCleaning.RuleName.FFEvent" ||
+                       key == "Dialog.TagCleaning.RuleName.SCEvent" ||
+                       key == "Dialog.TagCleaning.RuleName.Suncre" ||
+                       key == "Dialog.TagCleaning.RuleName.AirComiket" ||
+                       key == "Dialog.TagCleaning.RuleName.ComicOne" ||
+                       key == "Dialog.TagCleaning.RuleName.KansaiComitia";
+            }).Select(delegate(TagCleaningRule rule)
+            {
+                TagCleaningRule copy = rule.Clone();
+                copy.Enabled = enabled;
+                return copy;
+            }).ToList();
+            AppendMissingRules(rules, eventRules);
+        }
+
+        private static List<TagCleaningRule> GetVersion6AddedRules()
+        {
+            return GetDefaultRules().Where(delegate(TagCleaningRule rule)
+            {
+                return rule.NameKey == "Dialog.TagCleaning.RuleName.ComicTreasure" ||
+                       rule.NameKey == "Dialog.TagCleaning.RuleName.ToraFestival";
+            }).Select(delegate(TagCleaningRule rule) { return rule.Clone(); }).ToList();
+        }
+
+        private static List<TagCleaningRule> GetVersion7AddedRules()
+        {
+            return GetDefaultRules().Where(delegate(TagCleaningRule rule)
+            {
+                return (rule.MatchType == TagCleaningMatchType.Contains &&
+                        String.Equals(rule.Pattern, "Comic", StringComparison.Ordinal)) ||
+                       rule.NameKey == "Dialog.TagCleaning.RuleName.CSPEvent" ||
+                       rule.NameKey == "Dialog.TagCleaning.RuleName.Reitaisai" ||
+                       rule.NameKey == "Dialog.TagCleaning.RuleName.RagnaFestival";
+            }).Select(delegate(TagCleaningRule rule) { return rule.Clone(); }).ToList();
+        }
+
+        private static void AppendMissingRules(List<TagCleaningRule> rules, IEnumerable<TagCleaningRule> additions)
+        {
+            foreach (TagCleaningRule addition in additions ?? new List<TagCleaningRule>())
+            {
+                bool exists = rules.Any(delegate(TagCleaningRule current)
+                {
+                    return String.Equals(TagCleaningMatchType.Normalize(current.MatchType), TagCleaningMatchType.Normalize(addition.MatchType), StringComparison.OrdinalIgnoreCase) &&
+                           String.Equals((current.Pattern ?? "").Trim(), (addition.Pattern ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+                });
+                if (!exists) rules.Add(addition.Clone());
+            }
         }
 
         private static List<CompiledRule> CompileRules(IEnumerable<TagCleaningRule> rules)

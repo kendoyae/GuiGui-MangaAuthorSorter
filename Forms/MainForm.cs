@@ -54,12 +54,19 @@ namespace MangaAuthorSorter
         private Label _lblProgressPath;
         private FastDataGridView _grid;
         private Font _gridStatusBoldFont;
+        private Font _gridStatusLinkFont;
+        private int _hoveredStatusRow = -1;
         private Font _filterRegularFont;
         private Font _filterBoldFont;
         private List<PlanItem> _allGridItems = new List<PlanItem>();
         private List<PlanItem> _visibleGridItems = new List<PlanItem>();
         private bool _applyingGridFilter;
         private ContextMenuStrip _gridContextMenu;
+        private ToolStripMenuItem _openFileLocationMenuItem;
+        private ToolStripMenuItem _copyFullPathMenuItem;
+        private ToolStripMenuItem _authorActionMenuItem;
+        private ToolStripMenuItem _manageExclusionMenuItem;
+        private ToolStripSeparator _gridActionSeparator;
         private ToolStripMenuItem _blockMenuItem;
         private ToolStripMenuItem _menuPreviewItem;
         private ToolStripMenuItem _menuExecuteItem;
@@ -76,6 +83,7 @@ namespace MangaAuthorSorter
         private TextBox _txtListSearch;
         private Button _btnToggleDetails;
         private ToolTip _detailsToolTip;
+        private ToolTip _scanCountToolTip;
         private const int DetailPanelWidth = 340;
         private readonly Dictionary<string, Button> _filterButtons =
             new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
@@ -372,12 +380,18 @@ namespace MangaAuthorSorter
             FormClosed += delegate
             {
                 if (_warmupDebounceTimer != null) _warmupDebounceTimer.Dispose();
+                if (_scanCountToolTip != null) _scanCountToolTip.Dispose();
                 _scanWarmup.Dispose();
                 ScanPerformanceDiagnostics.SettingsChanged -= HandlePerformanceSettingsChanged;
                 if (_gridStatusBoldFont != null)
                 {
                     _gridStatusBoldFont.Dispose();
                     _gridStatusBoldFont = null;
+                }
+                if (_gridStatusLinkFont != null)
+                {
+                    _gridStatusLinkFont.Dispose();
+                    _gridStatusLinkFont = null;
                 }
                 if (_filterRegularFont != null)
                 {
@@ -956,7 +970,8 @@ namespace MangaAuthorSorter
             separator.Margin = new Padding(8, 3, 10, 0);
             flow.Controls.Add(separator);
 
-            flow.Controls.Add(CreateInlineLabel(L("Main.ScanCount")));
+            Label scanCountLabel = CreateInlineLabel(L("Main.ScanCount"));
+            flow.Controls.Add(scanCountLabel);
             _numScanLimit = new NumericUpDown();
             _numScanLimit.Width = 65;
             _numScanLimit.Minimum = 0;
@@ -967,6 +982,10 @@ namespace MangaAuthorSorter
             _numScanLimit.Margin = new Padding(0, 2, 10, 0);
             _numScanLimit.ValueChanged += delegate { ScheduleScanWarmup(false); };
             flow.Controls.Add(_numScanLimit);
+            _scanCountToolTip = new ToolTip();
+            _scanCountToolTip.ShowAlways = true;
+            _scanCountToolTip.SetToolTip(_numScanLimit, L("Main.ScanCountHint"));
+            _scanCountToolTip.SetToolTip(scanCountLabel, L("Main.ScanCountHint"));
 
             _chkRecursive = new CheckBox();
             _chkRecursive.Text = L("Main.Recursive");
@@ -2258,6 +2277,8 @@ namespace MangaAuthorSorter
             performanceItem.Click += delegate { ShowScanPerformancePanel(); };
             ToolStripMenuItem readmeItem = new ToolStripMenuItem(L("Menu.Readme"));
             readmeItem.Click += delegate { OpenReadme(); };
+            ToolStripMenuItem changelogItem = new ToolStripMenuItem(L("Menu.Changelog"));
+            changelogItem.Click += delegate { OpenChangelog(); };
             _checkUpdatesItem = new ToolStripMenuItem(L("Menu.CheckUpdates"));
             _checkUpdatesItem.Click += delegate { CheckForUpdatesManually(); };
             ToolStripMenuItem aboutItem = new ToolStripMenuItem(L("Menu.About"));
@@ -2265,6 +2286,7 @@ namespace MangaAuthorSorter
             ToolStripMenuItem supportItem = new ToolStripMenuItem(L("Menu.Support"));
             supportItem.Click += delegate { ShowSupportDialog(); };
             helpMenu.DropDownItems.Add(readmeItem);
+            helpMenu.DropDownItems.Add(changelogItem);
             helpMenu.DropDownItems.Add(performanceItem);
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
             helpMenu.DropDownItems.Add(_checkUpdatesItem);
@@ -2485,21 +2507,16 @@ namespace MangaAuthorSorter
 
         private void OpenReadme()
         {
-            string path = AppFiles.ResolveReadme(_appDir);
-            if (!File.Exists(path))
-            {
-                UiMessageBox.Show(this, L("Status.ReadmeMissing"), L("Menu.Readme"), MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            string content = EmbeddedResourceService.ReadText(EmbeddedResourceService.Readme);
+            using (TextResourceForm dlg = new TextResourceForm(_language, Font, L("Menu.Readme"), content))
+                dlg.ShowDialog(this);
+        }
 
-            try
-            {
-                Process.Start("notepad.exe", "\"" + path + "\"");
-            }
-            catch (Exception ex)
-            {
-                UiMessageBox.Show(this, ex.Message, L("Common.Error.OpenFailed"), MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+        private void OpenChangelog()
+        {
+            string content = EmbeddedResourceService.ReadText(EmbeddedResourceService.Changelog);
+            using (TextResourceForm dlg = new TextResourceForm(_language, Font, L("Menu.Changelog"), content))
+                dlg.ShowDialog(this);
         }
 
         private void ShowAboutDialog()
@@ -2589,7 +2606,7 @@ namespace MangaAuthorSorter
 
         private void ShowSupportDialog()
         {
-            using (SupportForm dlg = new SupportForm(_language, Font, _appDir))
+            using (SupportForm dlg = new SupportForm(_language, Font))
             {
                 dlg.ShowDialog(this);
             }
@@ -2780,14 +2797,24 @@ namespace MangaAuthorSorter
             if (search.Length == 0)
                 return true;
 
-            return ContainsIgnoreCase(item.FileName, search) ||
-                ContainsIgnoreCase(item.Author, search) ||
-                ContainsIgnoreCase(item.MatchedAs, search) ||
-                ContainsIgnoreCase(GetDisplayReasonText(item), search) ||
-                ContainsIgnoreCase(item.TargetDir, search) ||
-                ContainsIgnoreCase(LocalizePlanStatus(item.Status), search) ||
-                ContainsIgnoreCase(item.ExclusionRuleName, search) ||
-                ContainsIgnoreCase(item.ExclusionScope, search);
+            string[] terms = Regex.Split(search, @"\s+")
+                .Where(delegate(string term) { return !String.IsNullOrWhiteSpace(term); })
+                .ToArray();
+
+            foreach (string term in terms)
+            {
+                bool matched = ContainsIgnoreCase(item.FileName, term) ||
+                    ContainsIgnoreCase(item.Author, term) ||
+                    ContainsIgnoreCase(item.MatchedAs, term) ||
+                    ContainsIgnoreCase(GetDisplayReasonText(item), term) ||
+                    ContainsIgnoreCase(item.TargetDir, term) ||
+                    ContainsIgnoreCase(LocalizePlanStatus(item.Status), term) ||
+                    ContainsIgnoreCase(item.ExclusionRuleName, term) ||
+                    ContainsIgnoreCase(item.ExclusionScope, term);
+                if (!matched)
+                    return false;
+            }
+            return true;
         }
 
         private static bool ContainsIgnoreCase(string text, string value)
@@ -3790,6 +3817,8 @@ namespace MangaAuthorSorter
             _grid = new FastDataGridView();
             if (_gridStatusBoldFont == null)
                 _gridStatusBoldFont = new Font(Font, FontStyle.Bold);
+            if (_gridStatusLinkFont == null)
+                _gridStatusLinkFont = new Font(Font, FontStyle.Bold | FontStyle.Underline);
             _grid.Dock = DockStyle.Fill;
             _grid.BackgroundColor = Color.White;
             _grid.BorderStyle = BorderStyle.None;
@@ -3841,12 +3870,31 @@ namespace MangaAuthorSorter
                 column.Resizable = DataGridViewTriState.True;
 
             _gridContextMenu = new ContextMenuStrip();
+            _gridContextMenu.ShowImageMargin = false;
+            _openFileLocationMenuItem = new ToolStripMenuItem(L("Context.OpenFileLocation"));
+            _openFileLocationMenuItem.Click += delegate { OpenSelectedFileLocation(); };
+            _copyFullPathMenuItem = new ToolStripMenuItem(L("Context.CopyFullPath"));
+            _copyFullPathMenuItem.Click += delegate { CopySelectedFullPaths(); };
+            _authorActionMenuItem = new ToolStripMenuItem(L("Details.AssignOtherAuthor"));
+            _authorActionMenuItem.Click += delegate { HandleDetailPrimaryAction(); };
+            _manageExclusionMenuItem = new ToolStripMenuItem(L("Details.ManageExclusionRules"));
+            _manageExclusionMenuItem.Click += delegate { ShowScanExclusionRulesDialog(); };
+            _gridActionSeparator = new ToolStripSeparator();
             _blockMenuItem = new ToolStripMenuItem(L("Status.BlockThis"));
             _blockMenuItem.Click += delegate { BlockSelectedArchives(); };
+            _gridContextMenu.Items.Add(_openFileLocationMenuItem);
+            _gridContextMenu.Items.Add(_copyFullPathMenuItem);
+            _gridContextMenu.Items.Add(new ToolStripSeparator());
+            _gridContextMenu.Items.Add(_authorActionMenuItem);
+            _gridContextMenu.Items.Add(_manageExclusionMenuItem);
+            _gridContextMenu.Items.Add(_gridActionSeparator);
             _gridContextMenu.Items.Add(_blockMenuItem);
             UiStyle.StyleMenu(_gridContextMenu);
 
             _grid.CellDoubleClick += GridCellDoubleClick;
+            _grid.CellClick += GridCellClick;
+            _grid.CellMouseMove += GridCellMouseMove;
+            _grid.CellMouseLeave += GridCellMouseLeave;
             _grid.CellMouseDown += GridCellMouseDown;
             _grid.CellValueNeeded += GridCellValueNeeded;
             _grid.CellFormatting += GridCellFormatting;
@@ -5406,9 +5454,15 @@ namespace MangaAuthorSorter
             PlanItem item = GetGridItem(e.RowIndex);
             if (item == null) return;
             Color color = GetGridStatusColor(item, RecognitionVisualResolver.Resolve(item));
+            RecognitionVisual visual = RecognitionVisualResolver.Resolve(item);
+            bool actionable = visual != null &&
+                (String.Equals(visual.Code, "ambiguous", StringComparison.OrdinalIgnoreCase) ||
+                 String.Equals(visual.Code, "unrecognized", StringComparison.OrdinalIgnoreCase));
             e.CellStyle.ForeColor = color;
             e.CellStyle.SelectionForeColor = color;
-            e.CellStyle.Font = _gridStatusBoldFont;
+            e.CellStyle.Font = actionable && e.RowIndex == _hoveredStatusRow
+                ? _gridStatusLinkFont
+                : _gridStatusBoldFont;
         }
 
         private void GridCellToolTipTextNeeded(object sender, DataGridViewCellToolTipTextNeededEventArgs e)
@@ -5564,6 +5618,37 @@ namespace MangaAuthorSorter
             int count =
                 _grid.SelectedRows.Count;
 
+            PlanItem singleItem = count == 1
+                ? GetSingleSelectedPlanItem()
+                : null;
+            _openFileLocationMenuItem.Enabled = singleItem != null &&
+                !String.IsNullOrWhiteSpace(singleItem.SourcePath);
+            _copyFullPathMenuItem.Enabled = count > 0;
+
+            _authorActionMenuItem.Visible = false;
+            _manageExclusionMenuItem.Visible = false;
+            if (singleItem != null)
+            {
+                if (singleItem.IsExcludedPreview)
+                {
+                    _manageExclusionMenuItem.Visible = true;
+                    _manageExclusionMenuItem.Enabled = !_isScanning && !_isExecuting;
+                }
+                else
+                {
+                    RecognitionVisual visual = RecognitionVisualResolver.Resolve(singleItem);
+                    string code = visual != null ? (visual.Code ?? "").ToLowerInvariant() : "";
+                    _authorActionMenuItem.Visible = true;
+                    _authorActionMenuItem.Text = code == "unrecognized"
+                        ? L("Details.AssignAuthor")
+                        : code == "ambiguous"
+                            ? L("Details.ChooseAuthor")
+                            : L("Details.AssignOtherAuthor");
+                    _authorActionMenuItem.Enabled = !_isScanning && !_isExecuting &&
+                        (code == "unrecognized" || !String.IsNullOrWhiteSpace(singleItem.Author));
+                }
+            }
+
             _blockMenuItem.Text =
                 count > 1
                     ? LF("Status.BlockSelectedMany", count)
@@ -5580,9 +5665,55 @@ namespace MangaAuthorSorter
             }
             _blockMenuItem.Enabled =
                 !_isScanning && !_isExecuting && count > 0 && !hasExcludedSelection;
+            _blockMenuItem.Visible = !hasExcludedSelection;
+            _gridActionSeparator.Visible = _authorActionMenuItem.Visible ||
+                _manageExclusionMenuItem.Visible || _blockMenuItem.Visible;
 
             _gridContextMenu.Show(
                 Cursor.Position);
+        }
+
+        private void OpenSelectedFileLocation()
+        {
+            PlanItem item = GetSingleSelectedPlanItem();
+            if (item == null || String.IsNullOrWhiteSpace(item.SourcePath)) return;
+            try
+            {
+                string path = Path.GetFullPath(item.SourcePath);
+                if (File.Exists(path))
+                    Process.Start("explorer.exe", "/select,\"" + path + "\"");
+                else
+                {
+                    string directory = Path.GetDirectoryName(path);
+                    if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
+                    Process.Start("explorer.exe", "\"" + directory + "\"");
+                }
+            }
+            catch (Exception ex)
+            {
+                UiMessageBox.Show(this, ex.Message, L("Common.Error.OpenFailed"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void CopySelectedFullPaths()
+        {
+            List<string> paths = new List<string>();
+            foreach (DataGridViewRow row in _grid.SelectedRows)
+            {
+                PlanItem item = GetGridItem(row.Index);
+                if (item != null && !String.IsNullOrWhiteSpace(item.SourcePath))
+                    paths.Add(Path.GetFullPath(item.SourcePath));
+            }
+            if (paths.Count == 0) return;
+            paths.Reverse();
+            try
+            {
+                Clipboard.SetText(String.Join(Environment.NewLine, paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()));
+            }
+            catch (Exception ex)
+            {
+                UiMessageBox.Show(this, ex.Message, L("Context.CopyFailed"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void BlockSelectedArchives()
@@ -5681,7 +5812,67 @@ namespace MangaAuthorSorter
                 string value = Convert.ToString(row.Cells[e.ColumnIndex].Value);
                 ShowOverlayEditor(e.RowIndex, e.ColumnIndex, value, true, p);
             }
-            else if (column == "MatchWhy") ChooseManualAuthorFolder(p);
+        }
+
+        private void GridCellClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (_isScanning || _isExecuting || e.RowIndex < 0 || e.ColumnIndex < 0)
+                return;
+            if (!String.Equals(_grid.Columns[e.ColumnIndex].Name, "Status", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            PlanItem item = GetGridItem(e.RowIndex);
+            if (item == null || item.IsExcludedPreview)
+                return;
+
+            RecognitionVisual visual = RecognitionVisualResolver.Resolve(item);
+            string code = visual != null ? (visual.Code ?? "") : "";
+            if (String.Equals(code, "ambiguous", StringComparison.OrdinalIgnoreCase))
+                ChooseManualAuthorFolder(item);
+            else if (String.Equals(code, "unrecognized", StringComparison.OrdinalIgnoreCase))
+                AssignAuthorNameToUnrecognized(item);
+        }
+
+        private void GridCellMouseMove(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            int nextRow = -1;
+            bool actionable = false;
+            if (e.RowIndex >= 0 && e.ColumnIndex >= 0 &&
+                String.Equals(_grid.Columns[e.ColumnIndex].Name, "Status", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanItem item = GetGridItem(e.RowIndex);
+                RecognitionVisual visual = item != null && !item.IsExcludedPreview
+                    ? RecognitionVisualResolver.Resolve(item)
+                    : null;
+                string code = visual != null ? (visual.Code ?? "") : "";
+                actionable = String.Equals(code, "ambiguous", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(code, "unrecognized", StringComparison.OrdinalIgnoreCase);
+                if (actionable)
+                    nextRow = e.RowIndex;
+            }
+
+            if (_hoveredStatusRow != nextRow)
+            {
+                int previousRow = _hoveredStatusRow;
+                _hoveredStatusRow = nextRow;
+                if (previousRow >= 0 && previousRow < _grid.RowCount)
+                    _grid.InvalidateCell(_grid.Columns["Status"].Index, previousRow);
+                if (nextRow >= 0 && nextRow < _grid.RowCount)
+                    _grid.InvalidateCell(_grid.Columns["Status"].Index, nextRow);
+            }
+            _grid.Cursor = actionable ? Cursors.Hand : Cursors.Default;
+        }
+
+        private void GridCellMouseLeave(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex == _hoveredStatusRow)
+            {
+                int previousRow = _hoveredStatusRow;
+                _hoveredStatusRow = -1;
+                _grid.Cursor = Cursors.Default;
+                if (previousRow >= 0 && previousRow < _grid.RowCount)
+                    _grid.InvalidateCell(_grid.Columns["Status"].Index, previousRow);
+            }
         }
 
         private void ShowOverlayEditor(int rowIndex, int columnIndex, string text, bool readOnly, PlanItem item)

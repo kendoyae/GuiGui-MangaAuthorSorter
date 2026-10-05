@@ -5,7 +5,7 @@
 ### 关于
 只负责软件身份、版本、项目入口和反馈入口：
 - 中文软件名：归归
-- 英文项目名：MangaAuthorSorter
+- 英文品牌名：GuiGui
 - 开发者：kendo
 - 版本号独立一行显示
 - GitHub 项目入口：按钮形式，不直接展示完整 URL
@@ -29,7 +29,7 @@
 - Windows 桌面端不再使用 `mqqapi://`。V1.11.21 已内置群号 `1103654612` 对应的 QQ 官方 `qm.qq.com` 加群链接。
 - `Assets/QQ_GROUP_JOIN_URL.txt` 作为可替换覆盖配置保留；未来 QQ 邀请链接失效时可只更新该文件。
 - 点击“归归反馈QQ群”先复制群号，再打开 QQ 官方加群链接；打开失败时保留已复制群号并给出兜底提示。
-- “GitHub 反馈”直接打开 `https://github.com/kendoyae/MangaAuthorSorter/issues`。
+- “GitHub 反馈”直接打开 `https://github.com/kendoyae/GuiGui-MangaAuthorSorter/issues`。
 - 外部 URL 由用户点击后才打开，不在后台自动启动浏览器。
 
 ## 更新入口
@@ -61,7 +61,7 @@
 - “帮助 → 关于”与“帮助 → 支持项目...”为两个独立入口。
 - 两个窗口均使用 UiStyle，与其他二级窗口保持字体、背景、边框、按钮风格一致。
 - 关于窗口应接近传统桌面软件 About 对话框：信息简洁、层级少、无需滚动。
-- 多语言文案保持短、标准；URL、开发者名 kendo、MangaAuthorSorter 标识不翻译。
+- 多语言文案保持短、标准；URL、开发者名 kendo、GuiGui 标识不翻译。
 
 ## V1.11.21 支持页面布局
 

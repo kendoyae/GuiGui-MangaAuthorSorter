@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo.
 echo ==========================================
-echo   MangaAuthorSorter Release Builder
+echo   GuiGui Release Builder
 echo ==========================================
 echo.
 
@@ -26,8 +26,8 @@ mkdir "RELEASE"
 mkdir "RELEASE\Single_EXE"
 mkdir "RELEASE\Portable"
 
-copy /y "MangaAuthorSorter.exe" "RELEASE\Single_EXE\MangaAuthorSorter.exe" >nul
-copy /y "MangaAuthorSorter.exe" "RELEASE\Portable\MangaAuthorSorter.exe" >nul
+copy /y "bin\Release\GuiGui.exe" "RELEASE\Single_EXE\GuiGui.exe" >nul
+copy /y "bin\Release\GuiGui.exe" "RELEASE\Portable\GuiGui.exe" >nul
 if exist "README.txt" copy /y "README.txt" "RELEASE\Portable\README.txt" >nul
 if exist "CHANGELOG.md" copy /y "CHANGELOG.md" "RELEASE\Portable\CHANGELOG.md" >nul
 if exist "LICENSE_NOTICES.txt" copy /y "LICENSE_NOTICES.txt" "RELEASE\Portable\LICENSE_NOTICES.txt" >nul
@@ -37,7 +37,7 @@ if exist "Assets" xcopy /e /i /y "Assets" "RELEASE\Portable\Assets" >nul
 echo [3/3] Done.
 echo.
 echo Single EXE:
-echo   RELEASE\Single_EXE\MangaAuthorSorter.exe
+echo   RELEASE\Single_EXE\GuiGui.exe
 echo.
 echo Portable package:
 echo   RELEASE\Portable\
@@ -46,7 +46,7 @@ echo Notes:
 echo - Internal Docs, Build files, source code and project files are not copied to Portable.
 echo - LICENSE_NOTICES.txt is public release documentation and is copied to Portable.
 echo - The single EXE creates its own config files and Languages folder on first run.
-echo - Optional Support QR images are loaded from Assets next to the EXE when present.
+echo - Help, license notices, icons, and support QR images are embedded in the EXE.
 echo - Everything SDK DLL is optional. If missing, the app can download it automatically.
 echo - If Everything SDK is unavailable, the app falls back to normal filesystem scanning.
 echo - Target PCs need a .NET Framework 4.8-compatible runtime.

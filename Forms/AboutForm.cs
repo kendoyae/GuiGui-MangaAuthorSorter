@@ -48,7 +48,9 @@ namespace MangaAuthorSorter
 
             PictureBox appIcon = new PictureBox();
             appIcon.Size = new Size(64, 64);
-            appIcon.Location = new Point(0, 38);
+            // Center the 64×64 artwork in an 80 px visual column and align its
+            // vertical center with the three information lines on the right.
+            appIcon.Location = new Point(8, 38);
             appIcon.SizeMode = PictureBoxSizeMode.CenterImage;
             try
             {
@@ -77,21 +79,21 @@ namespace MangaAuthorSorter
             tagline.Text = language.Get("About.Tagline");
             tagline.ForeColor = UiStyle.Muted;
             tagline.AutoSize = true;
-            tagline.Location = new Point(85, 38);
+            tagline.Location = new Point(96, 38);
             header.Controls.Add(tagline);
 
             Label developer = new Label();
             developer.Text = language.Get("About.Developer") + " kendo";
             developer.ForeColor = UiStyle.Muted;
             developer.AutoSize = true;
-            developer.Location = new Point(85, 64);
+            developer.Location = new Point(96, 64);
             header.Controls.Add(developer);
 
             Label version = new Label();
             version.Text = language.Get("About.Version") + " " + AppVersion.Display;
             version.ForeColor = UiStyle.Muted;
             version.AutoSize = true;
-            version.Location = new Point(85, 87);
+            version.Location = new Point(96, 87);
             header.Controls.Add(version);
 
             root.Controls.Add(header, 0, 0);
@@ -161,7 +163,7 @@ namespace MangaAuthorSorter
             Button license = NewAutoButton(language.Get("About.License"), 92, false);
             license.Click += delegate
             {
-                using (LicenseForm dlg = new LicenseForm(_language, Font, _appDir))
+                using (LicenseForm dlg = new LicenseForm(_language, Font))
                     dlg.ShowDialog(this);
             };
             left.Controls.Add(license);

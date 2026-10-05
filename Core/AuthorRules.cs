@@ -224,6 +224,11 @@ namespace MangaAuthorSorter
 
             string society = m.Groups[1].Value.Trim();
             string inside = m.Groups[2].Value.Trim();
+            // A plus immediately before the parenthesized creator is commonly
+            // used as a visual separator: "Xration+(mil)" == "Xration (mil)".
+            // Strip only this terminal separator; plus signs elsewhere remain
+            // meaningful multi-author delimiters.
+            society = society.TrimEnd(' ', '+', '＋');
             if (society.Length == 0 || inside.Length == 0) return null;
 
             StructuredAuthorParts result = new StructuredAuthorParts();
@@ -569,8 +574,94 @@ namespace MangaAuthorSorter
             if (String.IsNullOrWhiteSpace(baseName)) return result;
 
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> leadingChain = GetLeadingIdentityChain(baseName, cleaningStore);
+            foreach (string value in leadingChain)
+            {
+                string candidate = (value ?? "").Trim();
+                string key = NormalizeText(candidate);
+                if (candidate.Length > 0 && seen.Add(key.Length > 0 ? key : candidate))
+                    result.Add(candidate);
+            }
+            if (result.Count > 0)
+                return result;
+
             int position = 0;
             bool consumedLeadingTag = false;
+
+            // Some archives use leading parentheses for the identity instead
+            // of square brackets: (circle) title. Skip known event/publication
+            // metadata first, then accept one explicit leading identity.
+            while (position < baseName.Length)
+            {
+                Match leadingParenthesis = ParenthesizedMetadataRegex.Match(baseName, position);
+                if (!leadingParenthesis.Success || leadingParenthesis.Index != position)
+                    break;
+
+                string value = leadingParenthesis.Groups[1].Value.Trim();
+                if (IsMetadataTag(value, cleaningStore) || IsPublicationKindTag(value))
+                {
+                    position = leadingParenthesis.Index + leadingParenthesis.Length;
+                    while (position < baseName.Length && Char.IsWhiteSpace(baseName[position])) position++;
+                    continue;
+                }
+
+                AddFileNameCandidate(result, seen, value, cleaningStore);
+                consumedLeadingTag = true;
+                position = leadingParenthesis.Index + leadingParenthesis.Length;
+                break;
+            }
+
+            // Repair narrowly scoped legacy prefixes before the normal bracket
+            // parser: [circle (creator) missing its ], or an identity ending in
+            // a stray ]. The extracted text must stay at the filename front.
+            if (!consumedLeadingTag && position < baseName.Length)
+            {
+                string remaining = baseName.Substring(position).TrimStart();
+                if (remaining.StartsWith("[", StringComparison.Ordinal) ||
+                    remaining.StartsWith("［", StringComparison.Ordinal) ||
+                    remaining.StartsWith("【", StringComparison.Ordinal))
+                {
+                    Match incomplete = Regex.Match(
+                        remaining,
+                        @"^[\[［【]\s*([^\]］】]{1,100}?[\)）])(?=\s|$)");
+                    if (incomplete.Success)
+                    {
+                        AddFileNameCandidate(result, seen, incomplete.Groups[1].Value, cleaningStore);
+                        consumedLeadingTag = true;
+                    }
+                }
+                else
+                {
+                    int strayClose = remaining.IndexOfAny(new[] { ']', '］', '】' });
+                    if (strayClose > 0 && strayClose <= 100)
+                    {
+                        AddFileNameCandidate(result, seen, remaining.Substring(0, strayClose), cleaningStore);
+                        consumedLeadingTag = true;
+                    }
+                    else
+                    {
+                        Match structuredPrefix = Regex.Match(
+                            remaining,
+                            @"^(.{1,60}?[\(（][^\)）]{1,40}[\)）])(?=\s|$)");
+                        if (structuredPrefix.Success)
+                        {
+                            AddFileNameCandidate(result, seen, structuredPrefix.Groups[1].Value, cleaningStore);
+                            consumedLeadingTag = true;
+                        }
+                        else
+                        {
+                            Match latinPrefix = Regex.Match(
+                                remaining,
+                                @"^([A-Za-z][A-Za-z0-9_.-]{2,39})(?=\s+[\(（])");
+                            if (latinPrefix.Success)
+                            {
+                                AddFileNameCandidate(result, seen, latinPrefix.Groups[1].Value, cleaningStore);
+                                consumedLeadingTag = true;
+                            }
+                        }
+                    }
+                }
+            }
 
             // Publication-kind labels can precede the actual identity run:
             // (同人誌) [circle] [creator]. Treat the exact, well-known labels
@@ -656,6 +747,105 @@ namespace MangaAuthorSorter
             return result;
         }
 
+        private static void AddFileNameCandidate(
+            List<string> result,
+            HashSet<string> seen,
+            string value,
+            TagCleaningRuleStore cleaningStore)
+        {
+            string candidate = (value ?? "").Trim();
+            if (candidate.Length == 0 || IsMetadataTag(candidate, cleaningStore))
+                return;
+            string key = NormalizeText(candidate);
+            if (key.Length == 0) key = candidate;
+            if (seen.Add(key)) result.Add(candidate);
+        }
+
+        private static List<string> GetLeadingIdentityChain(
+            string text,
+            TagCleaningRuleStore cleaningStore)
+        {
+            List<string> identities = new List<string>();
+            List<string> sourceFallbacks = new List<string>();
+            if (String.IsNullOrWhiteSpace(text)) return identities;
+
+            int position = 0;
+            bool parsedToken = false;
+            while (position < text.Length)
+            {
+                while (position < text.Length &&
+                       (Char.IsWhiteSpace(text[position]) ||
+                        text[position] == '+' || text[position] == '＋' ||
+                        text[position] == '\\' || text[position] == '/'))
+                {
+                    position++;
+                }
+                if (position >= text.Length) break;
+
+                Match bracket = LeadingBracketRegex.Match(text, position);
+                if (bracket.Success && bracket.Index == position && bracket.Length > 0)
+                {
+                    parsedToken = true;
+                    string value = bracket.Groups[1].Success
+                        ? bracket.Groups[1].Value.Trim()
+                        : bracket.Groups[2].Value.Trim();
+                    if (IsMetadataTag(value, cleaningStore))
+                    {
+                        if (IsSourceIdentityFallback(value))
+                            sourceFallbacks.Add(value);
+                    }
+                    else if (value.Length > 0)
+                    {
+                        identities.Add(value);
+                    }
+                    position = bracket.Index + bracket.Length;
+                    continue;
+                }
+
+                Match parenthesis = ParenthesizedMetadataRegex.Match(text, position);
+                if (parenthesis.Success && parenthesis.Index == position && parenthesis.Length > 0)
+                {
+                    parsedToken = true;
+                    string value = parenthesis.Groups[1].Value.Trim();
+                    if (IsMetadataTag(value, cleaningStore) ||
+                        IsPublicationKindTag(value) ||
+                        IsConventionMetadata(value))
+                    {
+                        position = parenthesis.Index + parenthesis.Length;
+                        continue;
+                    }
+
+                    // A non-metadata parenthesis at the filename front is an
+                    // identity. Once found, following text is the work title.
+                    if (value.Length > 0)
+                        identities.Add(value);
+                    break;
+                }
+
+                break;
+            }
+
+            if (identities.Count == 0 && parsedToken && sourceFallbacks.Count == 1)
+                identities.Add(sourceFallbacks[0]);
+            return identities;
+        }
+
+        private static bool IsSourceIdentityFallback(string value)
+        {
+            string n = NormalizeText(value);
+            return n == NormalizeText("ニジエ") ||
+                   n == NormalizeText("Pixiv");
+        }
+
+        private static bool IsConventionMetadata(string value)
+        {
+            string n = (value ?? "").Normalize(NormalizationForm.FormKC).Trim();
+            return Regex.IsMatch(
+                n,
+                @"^(?:C|AC|COMIC|COMITIA|コミケ|コミティア)\s*\d",
+                RegexOptions.IgnoreCase);
+        }
+
         private static bool TryAdvancePastParenthesizedMetadata(
             string text,
             int position,
@@ -721,6 +911,48 @@ namespace MangaAuthorSorter
         {
             List<string> candidates = GetAuthorCandidatesFromFileName(baseName);
             return candidates.Count > 0 ? candidates[0] : null;
+        }
+
+        public static bool StartsWithCompleteIdentity(string fileBaseName, string identity)
+        {
+            string file = NormalizeText(fileBaseName);
+            string name = NormalizeText(GetDirectMatchIdentity(identity));
+            if (file.Length == 0 || name.Length < 2 || !file.StartsWith(name, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (file.Length == name.Length)
+                return true;
+
+            char boundary = file[name.Length];
+            return Char.IsWhiteSpace(boundary) ||
+                boundary == '(' || boundary == '[' ||
+                boundary == '-' || boundary == '_' ||
+                boundary == '・' || boundary == '·' ||
+                boundary == '／' || boundary == '/';
+        }
+
+        // Some legacy names place an unwrapped convention descriptor before
+        // the creator, for example "コミケ96ダイジェスト版 荒井啓 [漢化]".
+        // Only a complete, already-existing identity immediately after a
+        // recognized convention prefix is accepted; arbitrary title text is
+        // never searched for author names in the middle.
+        public static bool StartsWithConventionDescriptionThenIdentity(
+            string fileBaseName,
+            string identity)
+        {
+            string file = (fileBaseName ?? "")
+                .Normalize(NormalizationForm.FormKC)
+                .Trim();
+            if (file.Length == 0) return false;
+
+            Match prefix = Regex.Match(
+                file,
+                @"^(?:(?:C|コミケ|COMITIA|コミティア|FF|SC|エアコミケ|関西コミティア)\s*\d{1,4}|COMIC1\s*[☆★＊*]?\s*\d{1,4}|サンクリ(?:\s*\d{1,4}|\s*\d{4}\s+(?:Spring|Summer|Autumn|Winter)))[^\s]*\s+",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!prefix.Success) return false;
+
+            return StartsWithCompleteIdentity(
+                file.Substring(prefix.Length),
+                identity);
         }
     }
 }

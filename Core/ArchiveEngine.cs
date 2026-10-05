@@ -381,6 +381,27 @@ namespace MangaAuthorSorter
                         ? authorCandidates[0]
                         : null;
 
+                // Deterministic fallback for untagged legacy files: an exact,
+                // complete existing folder identity at the filename start is
+                // strong evidence. Boundary checks prevent partial-name hits.
+                if (String.IsNullOrWhiteSpace(author))
+                {
+                    string fileBaseName = Path.GetFileNameWithoutExtension(p.FileName);
+                    foreach (AuthorFolder folder in searchableAuthors)
+                    {
+                        if (folder != null &&
+                            (AuthorRules.StartsWithCompleteIdentity(fileBaseName, folder.AuthorName) ||
+                             AuthorRules.StartsWithConventionDescriptionThenIdentity(fileBaseName, folder.AuthorName)))
+                        {
+                            authorCandidates.Add(folder.AuthorName);
+                        }
+                    }
+                    authorCandidates = authorCandidates
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    author = authorCandidates.Count > 0 ? authorCandidates[0] : null;
+                }
+
                 // A user may explicitly name an author from the context panel
                 // even when the file name cannot be parsed. Manual identity is
                 // authoritative for this item and lets the normal planner decide

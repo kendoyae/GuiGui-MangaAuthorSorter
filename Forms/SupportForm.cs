@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
 using System.Windows.Forms;
 
 namespace MangaAuthorSorter
@@ -13,7 +12,7 @@ namespace MangaAuthorSorter
 
         private readonly LanguageManager _language;
 
-        public SupportForm(LanguageManager language, Font appFont, string appDir)
+        public SupportForm(LanguageManager language, Font appFont)
         {
             _language = language;
 
@@ -71,8 +70,8 @@ namespace MangaAuthorSorter
             qrRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             qrRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             qrRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            qrRow.Controls.Add(CreateQrCard(language.Get("Support.WeChat"), appDir, "SupportWeChat.png", false), 0, 0);
-            qrRow.Controls.Add(CreateQrCard(language.Get("Support.Alipay"), appDir, "SupportAlipay.png", true), 1, 0);
+            qrRow.Controls.Add(CreateQrCard(language.Get("Support.WeChat"), EmbeddedResourceService.SupportWeChat, false), 0, 0);
+            qrRow.Controls.Add(CreateQrCard(language.Get("Support.Alipay"), EmbeddedResourceService.SupportAlipay, true), 1, 0);
             root.Controls.Add(qrRow, 0, 3);
 
             Label onlineTitle = NewSectionTitle(language.Get("Support.OnlineSupport"));
@@ -123,7 +122,7 @@ namespace MangaAuthorSorter
             CancelButton = close;
         }
 
-        private Control CreateQrCard(string titleText, string appDir, string fileName, bool rightCard)
+        private Control CreateQrCard(string titleText, string resourceName, bool rightCard)
         {
             TableLayoutPanel card = new TableLayoutPanel();
             card.Anchor = AnchorStyles.None;
@@ -146,7 +145,7 @@ namespace MangaAuthorSorter
             imageHost.Size = new Size(240, 240);
             imageHost.BackColor = Color.White;
 
-            Image image = LoadOptionalImage(appDir, fileName);
+            Image image = EmbeddedResourceService.ReadImage(resourceName);
             if (image != null)
             {
                 PictureBox picture = new PictureBox();
@@ -213,26 +212,5 @@ namespace MangaAuthorSorter
             }
         }
 
-        private static Image LoadOptionalImage(string appDir, string fileName)
-        {
-            if (String.IsNullOrWhiteSpace(appDir) || String.IsNullOrWhiteSpace(fileName))
-                return null;
-
-            string path = Path.Combine(appDir, "Assets", fileName);
-            if (!File.Exists(path))
-                return null;
-
-            try
-            {
-                using (Image source = Image.FromFile(path))
-                {
-                    return new Bitmap(source);
-                }
-            }
-            catch
-            {
-                return null;
-            }
-        }
     }
 }
