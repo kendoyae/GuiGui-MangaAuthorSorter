@@ -4,7 +4,12 @@
 
 ![GuiGui application icon](Assets/AppIcon256.png)
 
-## GuiGui, pale with longing, follows her love there and back; GuiGui, pale with longing, where shall she seek him?
+**Gui Gui, wan with yearning,**  
+**follows her love through coming and going;**  
+**Gui Gui, faint with longing—**  
+**where now shall she seek her beloved?**
+
+
 
 If, like me, you enjoy organizing authors into separate folders, GuiGui may be just what you need.
 
