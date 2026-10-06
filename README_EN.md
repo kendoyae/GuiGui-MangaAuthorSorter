@@ -4,12 +4,14 @@
 
 ![GuiGui application icon](Assets/AppIcon256.png)
 
+[Download](https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases) [https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases](https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases)
+
+
+
 **Gui Gui, wan with yearning,**  
 **follows her love through coming and going;**  
 **Gui Gui, faint with longing—**  
 **where now shall she seek her beloved?**
-
-
 
 If, like me, you enjoy organizing authors into separate folders, GuiGui may be just what you need.
 

@@ -4,6 +4,10 @@
 
 ![归归应用图标](Assets/AppIcon256.png)
 
+[下载](https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases) [https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases](https://github.com/kendoyae/GuiGui-MangaAuthorSorter/releases)
+
+
+
 ## 归归黄淡思，逐郎还去来；归归黄淡思，逐郎何处索？
 
 如果你和我一样喜欢把作者按文件夹分类，那么归归非常适合你。
