@@ -25,11 +25,14 @@ if exist "RELEASE" rmdir /s /q "RELEASE"
 mkdir "RELEASE"
 mkdir "RELEASE\Single_EXE"
 mkdir "RELEASE\Portable"
+mkdir "RELEASE\Portable\Docs"
 
 copy /y "bin\Release\GuiGui.exe" "RELEASE\Single_EXE\GuiGui.exe" >nul
 copy /y "bin\Release\GuiGui.exe" "RELEASE\Portable\GuiGui.exe" >nul
-if exist "README.txt" copy /y "README.txt" "RELEASE\Portable\README.txt" >nul
-if exist "CHANGELOG.md" copy /y "CHANGELOG.md" "RELEASE\Portable\CHANGELOG.md" >nul
+for %%L in (zh-CN en-US de-DE) do (
+    copy /y "Docs\Guide.%%L.md" "RELEASE\Portable\Docs\Guide.%%L.md" >nul
+    copy /y "Docs\Changelog.%%L.md" "RELEASE\Portable\Docs\Changelog.%%L.md" >nul
+)
 if exist "LICENSE_NOTICES.txt" copy /y "LICENSE_NOTICES.txt" "RELEASE\Portable\LICENSE_NOTICES.txt" >nul
 if exist "Languages" xcopy /e /i /y "Languages" "RELEASE\Portable\Languages" >nul
 if exist "Assets" xcopy /e /i /y "Assets" "RELEASE\Portable\Assets" >nul
@@ -43,7 +46,8 @@ echo Portable package:
 echo   RELEASE\Portable\
 echo.
 echo Notes:
-echo - Internal Docs, Build files, source code and project files are not copied to Portable.
+echo - Localized user guides and changelogs are copied to Portable\Docs.
+echo - Internal developer documents are not copied to Portable.
 echo - LICENSE_NOTICES.txt is public release documentation and is copied to Portable.
 echo - The single EXE creates its own config files and Languages folder on first run.
 echo - Help, license notices, icons, and support QR images are embedded in the EXE.

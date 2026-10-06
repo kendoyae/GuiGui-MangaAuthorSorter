@@ -36,9 +36,13 @@ echo Building GuiGui.exe...
  /resource:"Assets\AppIcon64.png",MangaAuthorSorter.AppIcon64.png ^
  /resource:"Assets\SupportWeChat.png",MangaAuthorSorter.SupportWeChat.png ^
  /resource:"Assets\SupportAlipay.png",MangaAuthorSorter.SupportAlipay.png ^
- /resource:"README.txt",MangaAuthorSorter.Readme.txt ^
+ /resource:"Docs\Guide.zh-CN.md",MangaAuthorSorter.Docs.Guide.zh-CN.md ^
+ /resource:"Docs\Guide.en-US.md",MangaAuthorSorter.Docs.Guide.en-US.md ^
+ /resource:"Docs\Guide.de-DE.md",MangaAuthorSorter.Docs.Guide.de-DE.md ^
+ /resource:"Docs\Changelog.zh-CN.md",MangaAuthorSorter.Docs.Changelog.zh-CN.md ^
+ /resource:"Docs\Changelog.en-US.md",MangaAuthorSorter.Docs.Changelog.en-US.md ^
+ /resource:"Docs\Changelog.de-DE.md",MangaAuthorSorter.Docs.Changelog.de-DE.md ^
  /resource:"LICENSE_NOTICES.txt",MangaAuthorSorter.LicenseNotices.txt ^
- /resource:"CHANGELOG.md",MangaAuthorSorter.Changelog.md ^
  /reference:System.dll ^
  /reference:System.Core.dll ^
  /reference:System.Drawing.dll ^

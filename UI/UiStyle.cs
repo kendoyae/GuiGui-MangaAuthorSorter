@@ -37,7 +37,16 @@ namespace MangaAuthorSorter
         {
             public bool Primary;
             public bool Danger;
+            public bool UnavailableAppearance;
             public bool Hooked;
+        }
+
+        public static void SetButtonUnavailableAppearance(Button button, bool unavailable)
+        {
+            if (button == null) return;
+            ButtonVisualState state = ButtonStates.GetValue(button, delegate(Button b) { return new ButtonVisualState(); });
+            state.UnavailableAppearance = unavailable;
+            ApplyButtonVisual(button, state);
         }
 
         private static readonly ConditionalWeakTable<Button, ButtonVisualState> ButtonStates =
@@ -69,12 +78,12 @@ namespace MangaAuthorSorter
         {
             if (button == null || state == null) return;
 
-            if (!button.Enabled)
+            if (!button.Enabled || state.UnavailableAppearance)
             {
                 button.BackColor = Soft;
                 button.FlatAppearance.BorderColor = Border;
                 button.ForeColor = Color.FromArgb(155, 158, 163);
-                button.Cursor = Cursors.Default;
+                button.Cursor = button.Enabled ? Cursors.Hand : Cursors.Default;
                 return;
             }
 

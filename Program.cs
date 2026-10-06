@@ -2,9 +2,9 @@ using System;
 using System.Reflection;
 using System.Windows.Forms;
 
-[assembly: AssemblyVersion("1.11.30.0")]
-[assembly: AssemblyFileVersion("1.11.30.0")]
-[assembly: AssemblyInformationalVersion("1.11.30")]
+[assembly: AssemblyVersion("1.12.0.0")]
+[assembly: AssemblyFileVersion("1.12.0.0")]
+[assembly: AssemblyInformationalVersion("1.12.0")]
 [assembly: AssemblyTitle("GuiGui")]
 [assembly: AssemblyProduct("GuiGui")]
 [assembly: AssemblyDescription("归归 / GuiGui 漫画作者识别与归档工具")]

@@ -497,7 +497,9 @@ namespace MangaAuthorSorter
             d["Status.SafetyTargetUnavailable"] = "Zielpfad fehlt oder ist nicht verfügbar.";
             d["Status.SafetyTargetNotWritable"] = "Zielpfad ist nicht beschreibbar.";
             d["Status.SafetyMissingSources"] = "{0} Quelldatei(en) fehlen.";
-            d["Status.SafetyTargetConflicts"] = "{0} Ziel- oder .moving-Datei(en) kollidieren.";
+            d["Status.SafetyExistingTargets"] = "An {0} Zielort(en) existiert bereits eine gleichnamige Datei.";
+            d["Status.SafetyMovingResidues"] = "{0} .moving-Datei(en) eines früheren Vorgangs gefunden.";
+            d["GridStatus.BatchTargetConflict"] = "Zielnamenskonflikt";
             d["Status.SafetyUnresolved"] = "{0} mehrdeutige oder unerkannte Einträge brauchen Bestätigung.";
             d["Status.SafetySpaceUnavailable"] = "Freier Speicher am Ziel nicht lesbar.";
             d["Status.SafetySpaceInsufficient"] = "Zu wenig freier Speicher am Ziel.";
@@ -508,6 +510,8 @@ namespace MangaAuthorSorter
             d["Status.SafetyDeficit"] = "Fehlen: {0}";
             d["Status.SafetyDetail"] = "Details: {0}";
             d["Status.SafetyAction"] = "Probleme beheben, Speicher freigeben, Stapel verkleinern oder anderes Ziel wählen.";
+            d["Status.NothingToOrganizeTitle"] = "Keine Dateien zum Ordnen";
+            d["Status.NothingToOrganizeBody"] = "Der aktuelle Scan enthält keine Dateien, die automatisch geordnet werden können. Doppelte, zurückgestellte und ausgeschlossene Einträge bleiben unverändert; zu prüfende Einträge müssen zuerst zugewiesen oder ausgeschlossen werden.";
             d["Status.ProgressBytes"] = "Verschoben {0} / {1}";
             d["Status.ProgressFree"] = "Verfügbar {0}";
             d["Status.ExecutionSpaceStopped"] = "Freier Speicher hat sich geändert. Rest nicht mehr sicher möglich. Noch zu kopieren: {0}; verfügbar: {1}; Reserve: {2}.";
@@ -722,6 +726,7 @@ namespace MangaAuthorSorter
             d["Details.Process.Manual"] = "Zugewiesenen Autor nutzen";
             d["Details.Process.AlreadyThere"] = "Kein Verschieben nötig";
             d["Details.Process.TargetExists"] = "Konflikt lösen";
+            d["Details.Process.BatchTargetConflict"] = "Zielnamenskonflikt lösen";
             d["Details.Result.Ready"] = "Bereit";
             d["Details.Result.NewFolder"] = "Autorenordner wird angelegt";
             d["Details.Result.Ambiguous"] = "Autor bestätigen";
@@ -729,11 +734,15 @@ namespace MangaAuthorSorter
             d["Details.Result.Excluded"] = "Von Sortierung ausgeschlossen";
             d["Details.Result.ExcludedRule"] = "Von Sortierung ausgeschlossen\r\nRegel: {0}";
             d["Details.Result.TargetExists"] = "Doppeltes Ziel lösen";
+            d["Details.Result.BatchTargetConflict"] = "{0} weitere Quelldatei(en) würden in dasselbe Ziel schreiben; Sortieren ist blockiert";
             d["Details.Result.AlreadyThere"] = "Kein Verschieben nötig";
             d["Details.Candidates"] = "Kandidaten: {0}";
             d["Details.AmbiguousContext"] = "Mehrere Autorenordner möglich.\r\n{0}";
             d["Details.AmbiguousContextNoCandidates"] = "Mehrere Autoren möglich. Vor dem Sortieren einen Autor wählen.";
             d["Details.UnrecognizedContext"] = "Autor nicht bestimmbar; diese Datei wird nicht automatisch sortiert.";
+            d["Details.ConflictTarget"] = "Konfliktziel: {0}";
+            d["Details.ConflictSource"] = "Quelle: {0}";
+            d["Details.ConflictOtherSource"] = "Andere Quelle: {0}";
             d["Details.ExcludedContext"] = "Scan-Ausschluss getroffen: {0}\r\nDieser Eintrag wird nicht sortiert.";
             d["Details.TargetExistsContext"] = "Gleichnamige Datei am Ziel vorhanden. Dieser Eintrag wird nicht automatisch verschoben.";
             d["Details.AssignOtherAuthor"] = "Anderen Autor zuweisen...";

@@ -1,6 +1,6 @@
 # 更新说明编写规则
 
-`CHANGELOG.md` 和程序内“更新说明”面向普通用户，不是开发日志。
+`Docs/Changelog.zh-CN.md`、`Docs/Changelog.en-US.md`、`Docs/Changelog.de-DE.md` 和程序内“更新说明”面向普通用户，不是开发日志。三个官方语言版本必须同步维护；GitHub Release 正文使用中文、English、Deutsch 三语言分区。
 
 ## 必须遵守
 

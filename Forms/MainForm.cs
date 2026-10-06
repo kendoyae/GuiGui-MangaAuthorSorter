@@ -240,6 +240,11 @@ namespace MangaAuthorSorter
             public long ReserveBytes;
             public int MissingSources;
             public int TargetConflicts;
+            public List<string> ConflictPaths = new List<string>();
+            public int ExistingTargetConflicts;
+            public int MovingFileConflicts;
+            public List<string> ExistingTargetPaths = new List<string>();
+            public List<string> MovingFilePaths = new List<string>();
             public bool PlanPathsChanged;
             public string Detail = "";
         }
@@ -1171,30 +1176,22 @@ namespace MangaAuthorSorter
                 {
                     _btnExecute.Enabled = false;
                 }
-                else if (reviewOnly)
-                {
-                    // Review-only is a navigation action, not a file move. It stays
-                    // available even when execution safety cannot yet be evaluated.
-                    _btnExecute.Enabled = true;
-                }
                 else
                 {
-                    // Safety is evaluated when the plan or its paths change.
-                    // Reuse that result when only the visible status view changes;
-                    // probing every source and target file here made tab switches
-                    // perform thousands of synchronous disk calls on the UI thread.
-                    _btnExecute.Enabled = _executionSafetyAllowsMove;
-                }
-
-                if (!reviewOnly &&
-                    String.Equals(_viewFilter, "excluded", StringComparison.OrdinalIgnoreCase))
-                {
-                    _btnExecute.Enabled = false;
+                    // Keep the action clickable after a scan. ExecuteMove performs
+                    // the authoritative safety check and explains any blocker;
+                    // a disabled button would leave the user without that reason.
+                    _btnExecute.Enabled = true;
                 }
             }
 
             if (_menuExecuteItem != null && _btnExecute != null)
                 _menuExecuteItem.Enabled = _btnExecute.Enabled && !_isExecuting && !_isScanning;
+
+            if (_btnExecute != null)
+                UiStyle.SetButtonUnavailableAppearance(
+                    _btnExecute,
+                    _btnExecute.Enabled && !reviewOnly && !_executionSafetyAllowsMove);
         }
 
         private void UpdatePrimaryActionPresentation()
@@ -1486,7 +1483,8 @@ namespace MangaAuthorSorter
 
             Label searchLabel = new Label();
             searchLabel.Text = L("Filter.Search");
-            searchLabel.Dock = DockStyle.Fill;
+            searchLabel.AutoSize = true;
+            searchLabel.Anchor = AnchorStyles.Right;
             searchLabel.TextAlign = ContentAlignment.MiddleRight;
             searchLabel.Margin = new Padding(0, 0, 6, 0);
             searchHost.Controls.Add(searchLabel, 0, 0);
@@ -1525,6 +1523,50 @@ namespace MangaAuthorSorter
             };
             _btnToggleDetails.Click += delegate { ToggleDetailsPanel(); };
             searchHost.Controls.Add(_btnToggleDetails, 2, 0);
+
+            // Keep the existing 230-pixel search-box width as its maximum, but
+            // let it yield space to the status filters when the window narrows.
+            // This prevents the filter strip from showing a horizontal scrollbar
+            // while preserving the current appearance at the normal window size.
+            bool resizingSearch = false;
+            Action resizeSearch = delegate
+            {
+                if (resizingSearch || barLayout.ClientSize.Width <= 0)
+                    return;
+
+                resizingSearch = true;
+                try
+                {
+                    int filterWidth = 0;
+                    foreach (Control control in filters.Controls)
+                        filterWidth += control.Width + control.Margin.Horizontal;
+
+                    int toggleColumnWidth = (int)Math.Round(40F * DeviceDpi / 96F);
+                    int fixedSearchWidth =
+                        searchLabel.GetPreferredSize(Size.Empty).Width +
+                        searchLabel.Margin.Horizontal + toggleColumnWidth;
+                    int filterReserveWidth =
+                        (int)Math.Round(16F * DeviceDpi / 96F);
+                    int availableTextWidth = barLayout.ClientSize.Width -
+                        filterWidth - fixedSearchWidth - filterReserveWidth;
+                    int maximumTextWidth = (int)Math.Round(230F * DeviceDpi / 96F);
+                    int minimumTextWidth = (int)Math.Round(52F * DeviceDpi / 96F);
+                    int textWidth = Math.Max(
+                        minimumTextWidth,
+                        Math.Min(maximumTextWidth, availableTextWidth));
+                    if (Math.Abs(searchHost.ColumnStyles[1].Width - textWidth) >= 1F)
+                        searchHost.ColumnStyles[1].Width = textWidth;
+                }
+                finally
+                {
+                    resizingSearch = false;
+                }
+            };
+            barLayout.SizeChanged += delegate { resizeSearch(); };
+            foreach (Control control in filters.Controls)
+                control.SizeChanged += delegate { resizeSearch(); };
+            Shown += delegate { resizeSearch(); };
+            resizeSearch();
 
             Panel bottomBorder = new Panel();
             bottomBorder.Dock = DockStyle.Bottom;
@@ -2498,14 +2540,14 @@ namespace MangaAuthorSorter
 
         private void OpenReadme()
         {
-            string content = EmbeddedResourceService.ReadText(EmbeddedResourceService.Readme);
+            string content = EmbeddedResourceService.ReadLocalizedDocument("Guide", _language.CurrentCode);
             using (TextResourceForm dlg = new TextResourceForm(_language, Font, L("Menu.Readme"), content))
                 dlg.ShowDialog(this);
         }
 
         private void OpenChangelog()
         {
-            string content = EmbeddedResourceService.ReadText(EmbeddedResourceService.Changelog);
+            string content = EmbeddedResourceService.ReadLocalizedDocument("Changelog", _language.CurrentCode);
             using (TextResourceForm dlg = new TextResourceForm(_language, Font, L("Menu.Changelog"), content))
                 dlg.ShowDialog(this);
         }
@@ -2747,6 +2789,9 @@ namespace MangaAuthorSorter
             if (item == null || item.IsExcludedPreview || item.CanMove)
                 return false;
 
+            if (String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase))
+                return true;
+
             string status = item.Status ?? "";
             return status == "目标已有同名文件，跳过" ||
                 status == "文件已在目标作者文件夹";
@@ -2772,10 +2817,10 @@ namespace MangaAuthorSorter
             }
 
             if (IsDeferredItem(item))
-            {
                 return String.Equals(_viewFilter, "all", StringComparison.OrdinalIgnoreCase) ||
-                    String.Equals(_viewFilter, "duplicate", StringComparison.OrdinalIgnoreCase);
-            }
+                    String.Equals(_viewFilter, "duplicate", StringComparison.OrdinalIgnoreCase) ||
+                    (String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase) &&
+                     String.Equals(_viewFilter, "attention", StringComparison.OrdinalIgnoreCase));
 
             RecognitionVisual visual = RecognitionVisualResolver.Resolve(item);
             string mark = visual != null ? visual.Mark : "";
@@ -2904,10 +2949,10 @@ namespace MangaAuthorSorter
             }
 
             SetFilterButtonText("all", L("Filter.All"), total);
-            int needsReview = ambiguous + unrecognized;
+            int needsReview = CountUnresolvedItems();
             SetFilterButtonText(
                 "attention",
-                (needsReview > 0 ? "⚠ " : "") + L("Nav.Review"),
+                L("Nav.Review"),
                 needsReview);
             SetFilterButtonText("matched", L("Filter.Matched"), matched);
             SetFilterButtonText("new", L("Filter.NewAuthor"), newAuthor);
@@ -3250,6 +3295,8 @@ namespace MangaAuthorSorter
                 : "";
 
             bool isExcluded = item.IsExcludedPreview;
+            bool isPlanConflict = !isExcluded &&
+                String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase);
             bool isAmbiguous = !isExcluded && visualCode == "ambiguous";
             bool isUnrecognized = !isExcluded && visualCode == "unrecognized";
             bool isNew = !isExcluded &&
@@ -3303,6 +3350,14 @@ namespace MangaAuthorSorter
                 primaryEnabled = !_isExecuting && !_isScanning;
                 secondaryText = L("Details.AlreadyExcluded");
                 secondaryEnabled = false;
+            }
+            else if (isPlanConflict)
+            {
+                processText = L("Details.Process.BatchTargetConflict");
+                targetText = item.ConflictTargetPath ?? item.TargetPath;
+                int otherSourceCount = Math.Max(0, item.ConflictSourcePaths.Count - 1);
+                resultText = LF("Details.Result.BatchTargetConflict", otherSourceCount);
+                resultColor = Color.FromArgb(220, 38, 38);
             }
             else if (isUnrecognized)
             {
@@ -3397,6 +3452,9 @@ namespace MangaAuthorSorter
             if (item.IsExcludedPreview)
                 return L("GridStatus.Excluded");
 
+            if (String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase))
+                return L("GridStatus.BatchTargetConflict");
+
             if (rawStatus == "文件已在目标作者文件夹")
                 return L("GridStatus.AlreadyThere");
             if (rawStatus == "目标已有同名文件，跳过")
@@ -3460,6 +3518,16 @@ namespace MangaAuthorSorter
                 parts.Add(fullStatus);
             if (!String.IsNullOrWhiteSpace(reason))
                 parts.Add(reason);
+
+            if (String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase))
+            {
+                parts.Add(LF("Details.ConflictTarget", item.ConflictTargetPath));
+                foreach (string source in item.ConflictSourcePaths)
+                {
+                    if (!String.Equals(source, item.SourcePath, StringComparison.OrdinalIgnoreCase))
+                        parts.Add(LF("Details.ConflictOtherSource", source));
+                }
+            }
 
             return String.Join("\r\n", parts.ToArray());
         }
@@ -4722,6 +4790,7 @@ namespace MangaAuthorSorter
                     }
 
                     _plan = result.Plan ?? new List<PlanItem>();
+                    ApplyPlanTargetConflictMarks(_plan);
                     _lastScanExcludedItems =
                         result.Search != null && result.Search.ExcludedItems != null
                             ? new List<ScanExcludedItem>(result.Search.ExcludedItems)
@@ -6337,6 +6406,7 @@ namespace MangaAuthorSorter
             }
 
             _plan = mergedPlan;
+            ApplyPlanTargetConflictMarks(_plan);
 
             RenderGrid(
                 keepSelectedPath);
@@ -6384,12 +6454,61 @@ namespace MangaAuthorSorter
                 RecognitionVisual visual = RecognitionVisualResolver.Resolve(item);
                 string code = visual != null ? (visual.Code ?? "") : "";
                 if (String.Equals(code, "ambiguous", StringComparison.OrdinalIgnoreCase) ||
-                    String.Equals(code, "unrecognized", StringComparison.OrdinalIgnoreCase))
+                    String.Equals(code, "unrecognized", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(code, "target-conflict", StringComparison.OrdinalIgnoreCase))
                 {
                     count++;
                 }
             }
             return count;
+        }
+
+        private static void ApplyPlanTargetConflictMarks(IList<PlanItem> plan)
+        {
+            if (plan == null) return;
+
+            foreach (PlanItem item in plan)
+            {
+                if (item == null ||
+                    !String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                item.CanMove = item.CanMoveBeforePlanConflict;
+                item.Status = item.StatusBeforePlanConflict ?? "";
+                item.PlanConflictKind = "";
+                item.ConflictTargetPath = "";
+                item.ConflictSourcePaths.Clear();
+            }
+
+            IEnumerable<IGrouping<string, PlanItem>> groups = plan
+                .Where(delegate(PlanItem p)
+                {
+                    return p != null && p.CanMove &&
+                        !String.IsNullOrWhiteSpace(p.TargetPath) &&
+                        !String.Equals(p.SourcePath, p.TargetPath, StringComparison.OrdinalIgnoreCase);
+                })
+                .GroupBy(delegate(PlanItem p) { return p.TargetPath; }, StringComparer.OrdinalIgnoreCase);
+
+            foreach (IGrouping<string, PlanItem> group in groups)
+            {
+                List<PlanItem> conflicts = group
+                    .GroupBy(delegate(PlanItem p) { return p.SourcePath; }, StringComparer.OrdinalIgnoreCase)
+                    .Select(delegate(IGrouping<string, PlanItem> sourceGroup) { return sourceGroup.First(); })
+                    .ToList();
+                if (conflicts.Count <= 1) continue;
+
+                List<string> sources = conflicts.Select(delegate(PlanItem p) { return p.SourcePath; }).ToList();
+                foreach (PlanItem item in conflicts)
+                {
+                    item.CanMoveBeforePlanConflict = item.CanMove;
+                    item.StatusBeforePlanConflict = item.Status ?? "";
+                    item.CanMove = false;
+                    item.Status = "批次内目标重名冲突";
+                    item.PlanConflictKind = "batch-target";
+                    item.ConflictTargetPath = group.Key;
+                    item.ConflictSourcePaths = new List<string>(sources);
+                }
+            }
         }
 
         private static bool PathsEqual(string left, string right)
@@ -6450,10 +6569,14 @@ namespace MangaAuthorSorter
 
             HashSet<string> conflictTargets =
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> existingTargets =
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> movingTargets =
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // Existing blocked target conflicts are part of the current batch
             // safety state too. Do not allow a partially-conflicted plan to run.
-            foreach (PlanItem planned in _plan)
+            foreach (PlanItem planned in movable)
             {
                 if (planned == null ||
                     String.IsNullOrWhiteSpace(planned.TargetPath) ||
@@ -6465,13 +6588,10 @@ namespace MangaAuthorSorter
                     continue;
                 }
 
-                if (File.Exists(planned.TargetPath) ||
-                    Directory.Exists(planned.TargetPath) ||
-                    File.Exists(planned.TargetPath + ".moving") ||
-                    Directory.Exists(planned.TargetPath + ".moving"))
-                {
-                    conflictTargets.Add(planned.TargetPath);
-                }
+                if (File.Exists(planned.TargetPath) || Directory.Exists(planned.TargetPath))
+                    existingTargets.Add(planned.TargetPath);
+                if (File.Exists(planned.TargetPath + ".moving") || Directory.Exists(planned.TargetPath + ".moving"))
+                    movingTargets.Add(planned.TargetPath + ".moving");
             }
 
             HashSet<string> plannedTargets =
@@ -6500,13 +6620,10 @@ namespace MangaAuthorSorter
                     check.MissingSources++;
                 }
 
-                if (File.Exists(item.TargetPath) ||
-                    Directory.Exists(item.TargetPath) ||
-                    File.Exists(item.TargetPath + ".moving") ||
-                    Directory.Exists(item.TargetPath + ".moving"))
-                {
-                    conflictTargets.Add(item.TargetPath);
-                }
+                if (File.Exists(item.TargetPath) || Directory.Exists(item.TargetPath))
+                    existingTargets.Add(item.TargetPath);
+                if (File.Exists(item.TargetPath + ".moving") || Directory.Exists(item.TargetPath + ".moving"))
+                    movingTargets.Add(item.TargetPath + ".moving");
 
                 if (!String.IsNullOrWhiteSpace(item.TargetPath) &&
                     !plannedTargets.Add(item.TargetPath))
@@ -6515,7 +6632,14 @@ namespace MangaAuthorSorter
                 }
             }
 
+            conflictTargets.UnionWith(existingTargets);
+            conflictTargets.UnionWith(movingTargets);
             check.TargetConflicts = conflictTargets.Count;
+            check.ConflictPaths = conflictTargets.Take(3).ToList();
+            check.ExistingTargetConflicts = existingTargets.Count;
+            check.MovingFileConflicts = movingTargets.Count;
+            check.ExistingTargetPaths = existingTargets.Take(3).ToList();
+            check.MovingFilePaths = movingTargets.Take(3).ToList();
 
             string spaceError;
             check.SpaceKnown =
@@ -6570,8 +6694,18 @@ namespace MangaAuthorSorter
                 message.AppendLine("• " + L("Status.SafetyPathsChanged"));
             if (check.MissingSources > 0)
                 message.AppendLine("• " + LF("Status.SafetyMissingSources", check.MissingSources));
-            if (check.TargetConflicts > 0)
-                message.AppendLine("• " + LF("Status.SafetyTargetConflicts", check.TargetConflicts));
+            if (check.ExistingTargetConflicts > 0)
+            {
+                message.AppendLine("• " + LF("Status.SafetyExistingTargets", check.ExistingTargetConflicts));
+                foreach (string path in check.ExistingTargetPaths)
+                    message.AppendLine("  • " + path);
+            }
+            if (check.MovingFileConflicts > 0)
+            {
+                message.AppendLine("• " + LF("Status.SafetyMovingResidues", check.MovingFileConflicts));
+                foreach (string path in check.MovingFilePaths)
+                    message.AppendLine("  • " + path);
+            }
             if (!check.SpaceKnown)
             {
                 message.AppendLine("• " + L("Status.SafetySpaceUnavailable"));
@@ -6734,7 +6868,18 @@ namespace MangaAuthorSorter
             if (movable.Count == 0)
             {
                 if (reviewCount > 0)
+                {
                     OpenNeedsReview();
+                }
+                else
+                {
+                    UiMessageBox.Show(
+                        this,
+                        L("Status.NothingToOrganizeBody"),
+                        L("Status.NothingToOrganizeTitle"),
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
                 return;
             }
 

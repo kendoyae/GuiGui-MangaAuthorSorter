@@ -53,6 +53,9 @@ namespace MangaAuthorSorter
             string why = item.MatchWhy ?? "";
             string status = item.Status ?? "";
 
+            if (String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase))
+                return Make("[!]", "target-conflict", "目标重名冲突", ErrorColor);
+
             // Manual assignment has the highest priority.
             if (Contains(why, "手动指定作者文件夹") ||
                 Contains(status, "手动指定"))

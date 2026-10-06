@@ -98,14 +98,10 @@
     <EmbeddedResource Include="Assets\SupportAlipay.png">
       <LogicalName>MangaAuthorSorter.SupportAlipay.png</LogicalName>
     </EmbeddedResource>
-    <EmbeddedResource Include="README.txt">
-      <LogicalName>MangaAuthorSorter.Readme.txt</LogicalName>
-    </EmbeddedResource>
+    <EmbeddedResource Include="Docs\Guide.*.md" />
+    <EmbeddedResource Include="Docs\Changelog.*.md" />
     <EmbeddedResource Include="LICENSE_NOTICES.txt">
       <LogicalName>MangaAuthorSorter.LicenseNotices.txt</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="CHANGELOG.md">
-      <LogicalName>MangaAuthorSorter.Changelog.md</LogicalName>
     </EmbeddedResource>
     <None Include="README.txt" />
     <None Include="RELEASE_BUILD_README.txt" />

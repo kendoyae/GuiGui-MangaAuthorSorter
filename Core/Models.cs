@@ -23,6 +23,14 @@ namespace MangaAuthorSorter
         public DateTime LastWriteTime;
         public long FileSize = -1;
 
+        // Populated after the archive plan is built. A batch conflict means
+        // multiple source files resolve to the same final target path.
+        public string PlanConflictKind = "";
+        public string ConflictTargetPath = "";
+        public List<string> ConflictSourcePaths = new List<string>();
+        public bool CanMoveBeforePlanConflict;
+        public string StatusBeforePlanConflict = "";
+
         // V1.11.6 display-only row for a global scan exclusion.
         // These items are never stored in the executable archive plan.
         public bool IsExcludedPreview;
