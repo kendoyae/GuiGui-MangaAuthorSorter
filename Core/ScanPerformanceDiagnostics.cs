@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -12,8 +12,18 @@ namespace MangaAuthorSorter
         public bool WarmupEnabled, EverythingEnabled, WarmupHit, ReadyBeforeRequest, SnapshotHit;
         public string Provider = "";
         public long WarmupWaitMs, SnapshotPrepareMs, FileDiscoveryMs;
+        public long ProviderQueryMs, IndexReconcileMs;
+        public long PlanCacheReadMs, PlanCacheWriteMs, FinalizeMs;
         public long AuthorMatchMs, UiApplyMs, TotalResponseMs;
+        public long IdentitySourceMs, TargetDirectoryMs, InitialIndexMs, IncrementalIndexMs;
+        public long PrepareRecognitionMs, PlanningLoopMs, OnlineLookupMs;
+        public int InitialIndexBuilds, IncrementalIndexAdds, UniqueAuthors, NewAuthorFolders;
         public int CandidateCount, ResultCount;
+        public long ParsedCacheHits, ParsedCacheMisses;
+        public long RecognitionCacheHits, RecognitionCacheMisses;
+        public long DestinationCacheHits, DestinationCacheMisses;
+        public int IndexCacheHits, IndexAdded, IndexRemoved, IndexModified, IndexMoved, IndexRenamed;
+        public int PlanCacheHits, RecalculatedFiles;
     }
 
     internal sealed class ScanWarmupStatusEntry
@@ -21,13 +31,18 @@ namespace MangaAuthorSorter
         public DateTime Time;
         public ScanWarmupState State;
         public string Provider = "";
+        public string Stage = "";
+        public string Error = "";
         public int CandidateCount;
         public long FileDiscoveryMs, TargetIndexMs, SnapshotPrepareMs;
+        public long ParsedCacheHits, ParsedCacheMisses;
+        public long RecognitionCacheHits, RecognitionCacheMisses;
+        public long DestinationCacheHits, DestinationCacheMisses;
     }
 
     internal static class ScanPerformanceDiagnostics
     {
-        public const string FormatVersion = "GL3";
+        public const string FormatVersion = "GL4";
         private static readonly object Gate = new object();
         private static readonly List<ScanPerformanceEntry> Entries = new List<ScanPerformanceEntry>();
         private static bool _enabled;
@@ -64,6 +79,7 @@ namespace MangaAuthorSorter
             {
                 _logPath = logPath ?? ""; _enabled = enabled; _warmupEnabled = warmupEnabled;
                 _everythingEnabled = everythingEnabled;
+                _lastWarmupStatus = null;
                 Entries.Clear();
                 LoadRecentEntries();
             }
@@ -95,7 +111,30 @@ namespace MangaAuthorSorter
             Action<ScanWarmupStatusEntry> handler = WarmupStatusChanged;
             if (handler != null) handler(status);
         }
-        public static void Clear() { lock (Gate) Entries.Clear(); }
+        // Clear must persist across restarts. Only drop the in-memory entries after
+        // successfully resetting the log; otherwise retain them for the user.
+        public static bool TryClear(out string error)
+        {
+            lock (Gate)
+            {
+                try
+                {
+                    if (!String.IsNullOrWhiteSpace(_logPath))
+                        File.WriteAllText(_logPath,
+                            "#" + FormatVersion + Environment.NewLine +
+                            "#UNIT=ms; zero-duration fields omitted" + Environment.NewLine,
+                            new UTF8Encoding(false));
+                    Entries.Clear();
+                    error = "";
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    return false;
+                }
+            }
+        }
 
         private static void AppendCompactLog(ScanPerformanceEntry e)
         {
@@ -108,7 +147,25 @@ namespace MangaAuthorSorter
                 text.Append(e.Time.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture));
                 Pair(text, "P", ProviderCode(e.Provider)); Pair(text, "H", B(e.WarmupHit)); Pair(text, "RB", B(e.ReadyBeforeRequest)); Pair(text, "SH", B(e.SnapshotHit));
                 PositivePair(text, "WW", e.WarmupWaitMs); PositivePair(text, "SP", e.SnapshotPrepareMs); PositivePair(text, "FD", e.FileDiscoveryMs);
+                PositivePair(text, "FQ", e.ProviderQueryMs); PositivePair(text, "FS", e.IndexReconcileMs);
+                PositivePair(text, "PCR", e.PlanCacheReadMs); PositivePair(text, "PCW", e.PlanCacheWriteMs);
+                PositivePair(text, "FIN", e.FinalizeMs);
                 PositivePair(text, "AM", e.AuthorMatchMs); PositivePair(text, "UI", e.UiApplyMs);
+                PositivePair(text, "IS", e.IdentitySourceMs); PositivePair(text, "TD", e.TargetDirectoryMs);
+                PositivePair(text, "IB", e.InitialIndexMs); PositivePair(text, "II", e.IncrementalIndexMs);
+                PositivePair(text, "PR", e.PrepareRecognitionMs); PositivePair(text, "PL", e.PlanningLoopMs);
+                PositivePair(text, "OL", e.OnlineLookupMs);
+                Pair(text, "IBC", e.InitialIndexBuilds.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "IAC", e.IncrementalIndexAdds.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "UA", e.UniqueAuthors.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "NA", e.NewAuthorFolders.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "PH", e.ParsedCacheHits.ToString(CultureInfo.InvariantCulture)); Pair(text, "PM", e.ParsedCacheMisses.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "RH", e.RecognitionCacheHits.ToString(CultureInfo.InvariantCulture)); Pair(text, "RM", e.RecognitionCacheMisses.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "DH", e.DestinationCacheHits.ToString(CultureInfo.InvariantCulture)); Pair(text, "DM", e.DestinationCacheMisses.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "IC", e.IndexCacheHits.ToString(CultureInfo.InvariantCulture)); Pair(text, "IA", e.IndexAdded.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "ID", e.IndexRemoved.ToString(CultureInfo.InvariantCulture)); Pair(text, "IM", e.IndexModified.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "IV", e.IndexMoved.ToString(CultureInfo.InvariantCulture)); Pair(text, "IR", e.IndexRenamed.ToString(CultureInfo.InvariantCulture));
+                Pair(text, "PC", e.PlanCacheHits.ToString(CultureInfo.InvariantCulture)); Pair(text, "RC", e.RecalculatedFiles.ToString(CultureInfo.InvariantCulture));
                 PositivePair(text, "TR", e.TotalResponseMs); Pair(text, "C", e.CandidateCount.ToString(CultureInfo.InvariantCulture)); Pair(text, "R", e.ResultCount.ToString(CultureInfo.InvariantCulture)); text.AppendLine();
                 File.AppendAllText(_logPath, text.ToString(), new UTF8Encoding(false));
             }
@@ -136,7 +193,7 @@ namespace MangaAuthorSorter
                 foreach (string raw in File.ReadAllLines(_logPath, Encoding.UTF8))
                 {
                     string line = (raw ?? "").Trim();
-                    if (line == "#GL3") { gl2 = true; continue; }
+                    if (line == "#GL3" || line == "#GL4") { gl2 = true; continue; }
                     if (line.StartsWith("#GL", StringComparison.Ordinal)) { gl2 = false; continue; }
                     if (!gl2) continue;
                     if (line.StartsWith("#", StringComparison.Ordinal) || line.Length == 0) continue;
@@ -147,7 +204,22 @@ namespace MangaAuthorSorter
                     ScanPerformanceEntry entry = new ScanPerformanceEntry { Time = time, WarmupEnabled = GetBool(fields, "H") || GetBool(fields, "RB"), EverythingEnabled = Get(fields, "P") == "ESDK",
                         Provider = Get(fields, "P") == "ESDK" ? "Everything SDK" : "FileSystem", WarmupHit = GetBool(fields, "H"), ReadyBeforeRequest = GetBool(fields, "RB"), SnapshotHit = GetBool(fields, "SH"),
                         WarmupWaitMs = GetLong(fields, "WW"), SnapshotPrepareMs = GetLong(fields, "SP"), FileDiscoveryMs = GetLong(fields, "FD"),
+                        ProviderQueryMs = GetLong(fields, "FQ"), IndexReconcileMs = GetLong(fields, "FS"),
+                        PlanCacheReadMs = GetLong(fields, "PCR"), PlanCacheWriteMs = GetLong(fields, "PCW"),
+                        FinalizeMs = GetLong(fields, "FIN"),
                         AuthorMatchMs = GetLong(fields, "AM"), UiApplyMs = GetLong(fields, "UI"), TotalResponseMs = GetLong(fields, "TR"),
+                        IdentitySourceMs = GetLong(fields, "IS"), TargetDirectoryMs = GetLong(fields, "TD"),
+                        InitialIndexMs = GetLong(fields, "IB"), IncrementalIndexMs = GetLong(fields, "II"),
+                        PrepareRecognitionMs = GetLong(fields, "PR"), PlanningLoopMs = GetLong(fields, "PL"),
+                        OnlineLookupMs = GetLong(fields, "OL"), InitialIndexBuilds = (int)GetLong(fields, "IBC"),
+                        IncrementalIndexAdds = (int)GetLong(fields, "IAC"), UniqueAuthors = (int)GetLong(fields, "UA"),
+                        NewAuthorFolders = (int)GetLong(fields, "NA"),
+                        ParsedCacheHits = GetLong(fields, "PH"), ParsedCacheMisses = GetLong(fields, "PM"),
+                        RecognitionCacheHits = GetLong(fields, "RH"), RecognitionCacheMisses = GetLong(fields, "RM"),
+                        DestinationCacheHits = GetLong(fields, "DH"), DestinationCacheMisses = GetLong(fields, "DM"),
+                        IndexCacheHits = (int)GetLong(fields, "IC"), IndexAdded = (int)GetLong(fields, "IA"), IndexRemoved = (int)GetLong(fields, "ID"),
+                        IndexModified = (int)GetLong(fields, "IM"), IndexMoved = (int)GetLong(fields, "IV"), IndexRenamed = (int)GetLong(fields, "IR"),
+                        PlanCacheHits = (int)GetLong(fields, "PC"), RecalculatedFiles = (int)GetLong(fields, "RC"),
                         CandidateCount = (int)GetLong(fields, "C"), ResultCount = (int)GetLong(fields, "R") };
                     Entries.Add(entry);
                     if (Entries.Count > 1000) Entries.RemoveAt(0);

@@ -38,7 +38,7 @@ GuiGui does not move files during the preview scan. Eligible files are organized
 
 - **Direct match:** The author in the file name exactly matches an existing author directory.
 - **Normalized:** The names differ only in safe character, spacing, or bracket variations.
-- **Alias match:** The corresponding author was found through the author alias library.
+- **Alias match:** The corresponding author was found through aliases in the author entity library.
 - **Circle match / Author match:** A circle or author was identified from a structured file name.
 - **New author:** No existing directory was found, so a new author directory is planned.
 - **Confirmation required:** Multiple candidates exist or there is insufficient information, so manual selection is required.
@@ -54,7 +54,7 @@ After selecting an item that requires confirmation or was not recognized, you ca
 - **File type profiles:** Determine which file extensions are included in scans.
 - **Tag cleaning rules:** Remove file-name tags that do not represent authors.
 - **Scan exclusion rules:** Skip files that should not be included in organization.
-- **Author alias library:** Maintain alternate spellings or names for the same author.
+- **Author entity library:** Add, edit and delete authors, groups and aliases; manage relationships, public overrides and conflicts in AuthorEntities.json.
 - **Archive settings:** Adjust grouping quantities, directory naming, and reserved disk space.
 
 ## 5. Everything
@@ -77,3 +77,8 @@ Use **Help → Check for Updates** or **About GuiGui** to check GitHub Releases.
 - **Release Notes:** Review additions, fixes, and improvements in each version.
 - **Performance Diagnostics:** Diagnose scan performance; the default settings are recommended for normal use.
 - **About GuiGui:** View the current version, project homepage, license, and feedback links.
+
+
+V1.12.8: Shallow scans now query only the selected directory (Everything `parent:`); recursive indexes are built on demand. File-provider and SQLite reconciliation timings are reported separately. See `Docs/INDEX_SCOPE_V1.12.8.md`.
+
+V1.12.10 author library: author/alias CRUD, public overrides, relationships and conflicts. Legacy TXT is import-only. [Operations and acceptance](Docs/UNIFIED_AUTHOR_LIBRARY.md).

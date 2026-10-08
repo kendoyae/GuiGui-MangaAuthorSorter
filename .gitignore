@@ -22,12 +22,38 @@ History.json
 GridLayouts.ini
 AuthorAliases.txt
 AuthorEntities.json
+GuiGuiAuthorIndex.db
+FileIndexCache.db
+作者别名库.txt
 ExclusionList.txt
 FileTypeProfiles.json
 TagCleaningRules.json
 ScanExclusionRules.json
 ScanPerformance.log
 DonationCache/
+/Cache/
+
+# User-library backups and migration/import recovery copies
+AuthorEntities.json.bak
+AuthorEntities.json.*.bak
+AuthorAliases.txt.bak
+AuthorAliases.txt.*.bak
+作者别名库.txt.bak
+作者别名库.txt.*.bak
+
+# SQLite sidecars (local database journals)
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Generated acceptance screenshots and private per-file scan evidence
+# Keep the Markdown performance/acceptance summaries under version control.
+/Docs/AuthorLibraryAcceptance/**/ui-*.png
+/Docs/AuthorLibraryAcceptance/**/prior-scan-differences.json
+/Docs/AuthorLibraryAcceptance/results.md
 
 # Runtime temporary / recovery files
 *.tmp

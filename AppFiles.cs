@@ -12,9 +12,11 @@ namespace MangaAuthorSorter
         public const string History = "History.json";
         public const string GridLayouts = "GridLayouts.ini";
         public const string AuthorEntities = "AuthorEntities.json";
+        public const string AuthorIndexDatabase = "GuiGuiAuthorIndex.db";
         public const string TagCleaningRules = "TagCleaningRules.json";
         public const string ScanExclusionRules = "ScanExclusionRules.json";
         public const string ScanPerformanceLog = "ScanPerformance.log";
+        public const string FileIndexDatabase = "FileIndexCache.db";
 
         public static string ResolveDataFile(
             string appDir,

@@ -13,7 +13,10 @@ namespace MangaAuthorSorter
         public ExecutionConfirmDialog(
             LanguageManager language,
             Font appFont,
-            int movableCount)
+            int movableCount,
+            int skippedCount,
+            string batchSize,
+            string targetFreeSize)
         {
             _language = language;
             Confirmed = false;
@@ -45,7 +48,12 @@ namespace MangaAuthorSorter
             root.Controls.Add(title, 0, 0);
 
             Label message = new Label();
-            message.Text = LF("Status.ExecuteConfirmBody", movableCount);
+            message.Text = LF(
+                "Status.ExecuteConfirmBodyDetailed",
+                movableCount,
+                skippedCount,
+                batchSize,
+                targetFreeSize);
             message.ForeColor = UiStyle.Muted;
             message.Dock = DockStyle.Fill;
             message.TextAlign = ContentAlignment.TopLeft;

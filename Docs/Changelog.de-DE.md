@@ -1,3 +1,59 @@
+## V1.12.10 — Einheitliche Autorenverwaltung und öffentliche Anpassungen
+
+- Separate Aliasbibliothek entfernt. AuthorEntities.json verwaltet Autoren, Gruppen, Aliase, Beziehungen, Konflikte, öffentliche Anpassungen, Import/Export und Abfragestatus.
+- Öffentliche Datenbank bleibt schreibgeschützt. Eindeutige stabile Identitäten behalten Anpassungen über Versionen hinweg; fehlende/geteilte Identitäten benötigen eine ausdrücklich bestätigte Neuzuordnung.
+- Erkennung und gespeicherte Pläne werden anhand der betroffenen Dateiabhängigkeiten ungültig; der Quelldateiindex bleibt erhalten. Temporäre Online-Entitäten können sicher gespeichert werden.
+- Migration mit 8.490 echten Dateien ohne Identitäts-/Zielabweichung; Wiederholung trifft alle 8.490 Cache-Einträge ohne Neuberechnung. Sechs historische Identitätskonflikte benötigen nun Bestätigung; Folgeänderungen sind dokumentiert.
+- Anleitung und Messprotokolle: Docs/UNIFIED_AUTHOR_LIBRARY.md und Docs/AuthorLibraryAcceptance. Version: 1.12.10.0.
+
+## V1.12.8 — Schnelle Leertreffer und inkrementeller Plan-Cache
+
+- Leere Everything-Abfragen anhand des indizierten Verzeichnisses prüfen; nur bei unsicherer Abdeckung das Dateisystem erneut durchsuchen.
+- Bei vollständigem Cache-Treffer keine Pläne erneut schreiben; nur neu berechnete Datensätze speichern und SQLite-Statements wiederverwenden.
+- Alte Abfragezeiten und Deltas aus dem Vorwärm-Cache nicht der aktuellen Diagnose zuordnen; Lese-, Schreib- und Abschlusszeiten getrennt erfassen.
+
+## V1.12.6 · Anzeige des Leistungsverlaufs korrigiert
+
+- Die Hintergrundvorbereitung überschreibt nach einem Neustart nicht mehr die Details eines ausgewählten früheren Scans.
+- Das Kopieren übernimmt stets den ausgewählten historischen Leistungsbericht.
+- Beim Löschen des Leistungsverlaufs wird auch die Protokolldatei geleert; bei einem Fehler bleiben die Einträge erhalten.
+- Ein Regressionstest prüft die Wiederherstellung des Verlaufs nach einem Neustart. Scan und Erkennung bleiben unverändert.
+
+## V1.12.6
+
+- Wiederholte vollständige Zielautorenindex-Aufbauten durch inkrementelle Ergänzungen ersetzt.
+- Diagnose der Phasen und Indexergänzungen bei echten Scans hinzugefügt (GL4, kompatibel mit GL3).
+- Regressionstests für identische Treffer bei inkrementellem und vollständigem Index. Sprachschema 75.
+
+## V1.12.5
+
+- Normale Autorenabfragen aus `GuiGuiAuthorIndex.db` verwenden nun einen einmal aufgebauten, schreibgeschützten Identitätsindex im Speicher statt mehrerer SQLite-Abfragen pro neuem Autor; GuiGui wärmt diesen Index im Hintergrund vor.
+- Der Simulations-Benchmark unterstützt jetzt die Anzahl eindeutiger Autoren sowie kalte und vorgewärmte Autorenindizes, damit Wiederholungen, Kaltstart und stabiler Betrieb getrennt gemessen werden können.
+- Der Bericht zeigt nun Aufbauzeit und Größe des Autorenindex, sodass Datenbankvorbereitung und eigentliche Erkennungszeit getrennt bewertet werden können.
+- Rohe Sprachschlüssel in Teilen der Leistungsdiagnose und des Simulationsfortschritts wurden behoben; das offizielle Sprachschema ist jetzt Version 74.
+
+## V1.12.4
+
+- Der Simulations-Benchmark zeigt laufend Phase, Fortschritt, aktuelles Element und verstrichene Zeit.
+- Das Simulationsfenster ist nun unabhängig und nicht modal; Hauptfenster und Leistungsdiagnose bleiben bedienbar.
+
+## V1.12.3
+
+- Ein Fehler beim Öffnen des Simulationsfensters auf bestimmten DPI-/Layout-Konfigurationen durch eine zu frühe SplitContainer-Positionierung wurde behoben.
+
+## V1.12.2
+
+- Ein vollständig speicherbasierter Simulations-Benchmark wurde ergänzt. Er liest `GuiGuiAuthorIndex.db` nur als Testdatenquelle und misst Erst-, Cache- und inkrementelle Scans, ohne echte Dateien oder produktive Caches zu verändern.
+
+## V1.12.1
+
+- Der Quellindex wurde auf ein Modell aus persistentem FileIndex, inkrementellen Änderungen, Recognition Cache und Query/View-Projektionen umgestellt.
+- Das Umschalten der Unterordnersuche ist nun nur noch eine Indexprojektion und löst keine erneute Erkennung bereits zwischengespeicherter Dateien aus.
+- Unveränderte Dateien werden vor Analyse und Erkennung ausgeschlossen; reine Verschiebungen behalten Erkennungsdaten, echte Umbenennungen machen nur die betroffene Datei ungültig.
+- Größen- und Zeitangaben werden direkt aus dem Everything-Index übernommen, sodass nicht für jedes Ergebnis erneut Dateimetadaten gelesen werden müssen.
+- Von GuiGui ausgeführte Verschiebungen und Umbenennungen aktualisieren den persistenten Index und die aktuelle Scan-Sitzung sofort.
+- Die Scandiagnose zeigt nun Indextreffer, Added/Modified/Moved/Renamed/Deleted-Änderungen, Plan-Cache-Treffer und neu berechnete Dateien.
+
 ## V1.12.0
 
 - Benutzerhandbuch und Versionshinweise sind nun auf Chinesisch, Englisch und Deutsch verfügbar und folgen der Oberflächensprache.

@@ -17,7 +17,7 @@ Während der Scanvorschau verschiebt GuiGui keine Dateien. Geeignete Dateien wer
 
 - **Direkte Übereinstimmung:** Der Autor im Dateinamen stimmt mit einem vorhandenen Autorenordner überein.
 - **Normalisiert:** Die Namen unterscheiden sich nur durch sichere Zeichen-, Leerzeichen- oder Klammervarianten.
-- **Alias-Treffer:** Der Autor wurde über die Aliasbibliothek gefunden.
+- **Alias-Treffer:** Der Autor wurde über Aliase in der Autoren-Entitätenbibliothek gefunden.
 - **Zirkel-/Autorentreffer:** Ein Zirkel oder Autor wurde aus einem strukturierten Dateinamen erkannt.
 - **Neuer Autor:** Es wurde kein vorhandener Ordner gefunden; ein neuer Autorenordner ist vorgesehen.
 - **Bestätigung erforderlich:** Mehrere Kandidaten oder zu wenige Informationen erfordern eine manuelle Auswahl.
@@ -33,7 +33,7 @@ Ein nicht eindeutig oder nicht erkannter Eintrag kann einem vorhandenen Autor, e
 - **Dateitypprofile:** Legen fest, welche Dateiendungen gescannt werden.
 - **Tag-Bereinigungsregeln:** Entfernen Dateinamen-Tags, die keinen Autor bezeichnen.
 - **Scan-Ausschlussregeln:** Überspringen Dateien, die nicht geordnet werden sollen.
-- **Autoren-Aliasbibliothek:** Verwaltet alternative Schreibweisen desselben Autors.
+- **Autoren-Entitätenbibliothek:** Verwaltet Autoren, Gruppen, Aliase, Beziehungen, öffentliche Anpassungen und Konflikte in AuthorEntities.json.
 - **Archiveinstellungen:** Steuern Gruppengröße, Ordnernamen und freien Sicherheitsbereich auf dem Datenträger.
 
 ## 5. Everything
@@ -56,3 +56,11 @@ Wählen Sie **Hilfe → Nach Updates suchen** oder **Über GuiGui**, um GitHub R
 - **Versionshinweise:** Zeigt Neuerungen, Fehlerbehebungen und Verbesserungen jeder Version.
 - **Leistungsdiagnose:** Analysiert die Scanleistung; für den normalen Gebrauch werden die Standardeinstellungen empfohlen.
 - **Über GuiGui:** Zeigt Version, Projektseite, Lizenz und Feedbackmöglichkeiten.
+
+## Autoren-Entitätenbibliothek (V1.12.10)
+
+In AuthorEntities.json Autoren und Gruppen hinzufügen, Standardnamen, Umschriften, Aliase, deaktivierte Namen und Bestätigungen bearbeiten. Ein gelöschter Alias entfernt keinen Autor. Vor dem Löschen einer Entität ihre Beziehungen aufheben.
+
+Öffentliche Datensätze sind schreibgeschützt. Benutzeranpassungen ändern den wirksamen Namen, ergänzen Aliase oder deaktivieren öffentliche Namen. Wiederherstellen entfernt die Anpassung. Bei fehlender oder geteilter Identität nach einer Aktualisierung Konflikte prüfen und die Anpassung ausdrücklich neu zuordnen. Lokale Daten bleiben erhalten.
+
+Namenskonflikte durch Kandidatenbestätigung, unabhängige Entitäten, offene Entscheidung oder Namensdeaktivierung behandeln. Beziehungen zu Benutzergruppen separat bearbeiten. Alte TXT-Dateien dienen nur dem Import. AuthorEntities.json, Sicherungen, Einstellungen, öffentliche Datenbank und Cache beim Aktualisieren behalten. [Hinweise und Prüfprotokolle](UNIFIED_AUTHOR_LIBRARY.md).

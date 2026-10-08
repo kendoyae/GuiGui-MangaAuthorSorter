@@ -13,6 +13,9 @@ namespace MangaAuthorSorter
     internal sealed class EverythingService
     {
         private const UInt32 RequestFullPathAndFileName = 0x00000004;
+        private const UInt32 RequestSize = 0x00000010;
+        private const UInt32 RequestDateCreated = 0x00000020;
+        private const UInt32 RequestDateModified = 0x00000040;
         private const UInt32 SortDateModifiedDescending = 14;
         private const UInt32 AllResults = 0xffffffff;
         private readonly string _appDir;
@@ -28,6 +31,22 @@ namespace MangaAuthorSorter
         {
             _appDir = appDir;
             _scanExclusionStore = scanExclusionStore;
+        }
+
+        public string IndexConfigurationVersion
+        {
+            get
+            {
+                if (_scanExclusionStore == null) return "ScanExclusion=none";
+                try
+                {
+                    string path = _scanExclusionStore.Path;
+                    long ticks = File.Exists(path)
+                        ? File.GetLastWriteTimeUtc(path).Ticks : 0;
+                    return "ScanExclusion=" + ticks.ToString();
+                }
+                catch { return "ScanExclusion=unknown"; }
+            }
         }
 
         public bool IsEverythingRunning()
@@ -117,6 +136,8 @@ namespace MangaAuthorSorter
                     ThrowIfCanceled(cancelRequested);
 
                     List<ScanExcludedItem> excluded = new List<ScanExcludedItem>();
+                    List<FileInfo> indexFiles = new List<FileInfo>();
+                    List<SourceIndexFileSnapshot> indexEntries = new List<SourceIndexFileSnapshot>();
                     int discovered = 0;
                     List<FileInfo> files =
                         QueryEverything(
@@ -126,6 +147,8 @@ namespace MangaAuthorSorter
                             blockedPaths,
                             normalizedExtensions,
                             excluded,
+                            indexFiles,
+                            indexEntries,
                             out discovered,
                             progress,
                             cancelRequested);
@@ -139,6 +162,8 @@ namespace MangaAuthorSorter
                     if (files.Count > 0 || discovered > 0 || excluded.Count > 0)
                     {
                         r.Files = files;
+                        r.IndexFiles = indexFiles;
+                        r.IndexEntries = indexEntries;
                         r.ExcludedItems = excluded;
                         r.DiscoveredCount = discovered;
                         r.Backend = "Everything SDK";
@@ -148,7 +173,26 @@ namespace MangaAuthorSorter
                         return r;
                     }
 
+                    // A successful empty SDK response is trustworthy only if
+                    // the requested directory itself is present in Everything's
+                    // index. Otherwise e.g. an excluded/unindexed drive would
+                    // silently yield a false empty result. Probe the indexed
+                    // directory by exact full path without walking its contents.
+                    if (IsEverythingDirectoryIndexed(source))
+                    {
+                        r.Files = files;
+                        r.IndexFiles = indexFiles;
+                        r.IndexEntries = indexEntries;
+                        r.ExcludedItems = excluded;
+                        r.DiscoveredCount = discovered;
+                        r.Backend = "Everything SDK";
+                        r.Detail = "Everything 官方 SDK 高速模式（已确认空结果）";
+                        return r;
+                    }
+
                     List<ScanExcludedItem> checkExcluded = new List<ScanExcludedItem>();
+                    List<FileInfo> checkIndexFiles = new List<FileInfo>();
+                    List<SourceIndexFileSnapshot> checkIndexEntries = new List<SourceIndexFileSnapshot>();
                     int checkDiscovered = 0;
                     List<FileInfo> check =
                         SearchFileSystem(
@@ -158,6 +202,8 @@ namespace MangaAuthorSorter
                             blockedPaths,
                             normalizedExtensions,
                             checkExcluded,
+                            checkIndexFiles,
+                            checkIndexEntries,
                             out checkDiscovered,
                             progress,
                             cancelRequested);
@@ -167,6 +213,8 @@ namespace MangaAuthorSorter
                     if (check.Count == 0 && checkExcluded.Count == 0)
                     {
                         r.Files = files;
+                        r.IndexFiles = indexFiles;
+                        r.IndexEntries = indexEntries;
                         r.ExcludedItems = excluded;
                         r.DiscoveredCount = discovered;
                         r.Backend = "Everything SDK";
@@ -175,6 +223,8 @@ namespace MangaAuthorSorter
                     }
 
                     r.Files = check;
+                    r.IndexFiles = checkIndexFiles;
+                    r.IndexEntries = checkIndexEntries;
                     r.ExcludedItems = checkExcluded;
                     r.DiscoveredCount = checkDiscovered;
                     r.Backend = "FileSystem";
@@ -190,6 +240,8 @@ namespace MangaAuthorSorter
                     ThrowIfCanceled(cancelRequested);
 
                     List<ScanExcludedItem> excluded = new List<ScanExcludedItem>();
+                    List<FileInfo> indexFiles = new List<FileInfo>();
+                    List<SourceIndexFileSnapshot> indexEntries = new List<SourceIndexFileSnapshot>();
                     int discovered = 0;
                     r.Files =
                         SearchFileSystem(
@@ -199,9 +251,13 @@ namespace MangaAuthorSorter
                             blockedPaths,
                             normalizedExtensions,
                             excluded,
+                            indexFiles,
+                            indexEntries,
                             out discovered,
                             progress,
                             cancelRequested);
+                    r.IndexFiles = indexFiles;
+                    r.IndexEntries = indexEntries;
                     r.ExcludedItems = excluded;
                     r.DiscoveredCount = discovered;
 
@@ -216,6 +272,8 @@ namespace MangaAuthorSorter
             }
 
             List<ScanExcludedItem> fsExcluded = new List<ScanExcludedItem>();
+            List<FileInfo> fsIndexFiles = new List<FileInfo>();
+            List<SourceIndexFileSnapshot> fsIndexEntries = new List<SourceIndexFileSnapshot>();
             int fsDiscovered = 0;
             r.Files =
                 SearchFileSystem(
@@ -225,9 +283,13 @@ namespace MangaAuthorSorter
                     blockedPaths,
                     normalizedExtensions,
                     fsExcluded,
+                    fsIndexFiles,
+                    fsIndexEntries,
                     out fsDiscovered,
                     progress,
                     cancelRequested);
+            r.IndexFiles = fsIndexFiles;
+            r.IndexEntries = fsIndexEntries;
             r.ExcludedItems = fsExcluded;
             r.DiscoveredCount = fsDiscovered;
 
@@ -237,6 +299,42 @@ namespace MangaAuthorSorter
             r.Detail = "Everything 未运行，使用普通文件系统扫描";
 
             return r;
+        }
+
+        internal SearchResult SearchFilesNative(
+            string source,
+            bool recursive,
+            int scanLimit,
+            HashSet<string> blockedPaths,
+            IEnumerable<string> extensions,
+            Action<ScanProgressInfo> progress,
+            Func<bool> cancelRequested)
+        {
+            ThrowIfCanceled(cancelRequested);
+            if (!Directory.Exists(source))
+                throw new DirectoryNotFoundException("原始位置不存在：" + source);
+
+            List<string> normalizedExtensions =
+                FileTypeRules.NormalizeExtensions(extensions);
+            if (normalizedExtensions.Count == 0)
+                throw new InvalidOperationException("没有设置任何需要扫描的文件扩展名。");
+
+            List<ScanExcludedItem> excluded = new List<ScanExcludedItem>();
+            List<FileInfo> indexFiles = new List<FileInfo>();
+            List<SourceIndexFileSnapshot> indexEntries = new List<SourceIndexFileSnapshot>();
+            int discovered;
+            SearchResult result = new SearchResult();
+            result.Files = SearchFileSystem(
+                source, recursive, scanLimit, blockedPaths,
+                normalizedExtensions, excluded, indexFiles, indexEntries, out discovered,
+                progress, cancelRequested);
+            result.IndexFiles = indexFiles;
+            result.IndexEntries = indexEntries;
+            result.ExcludedItems = excluded;
+            result.DiscoveredCount = discovered;
+            result.Backend = "FileSystem";
+            result.Detail = "使用 Windows 文件系统扫描";
+            return result;
         }
 
         private string GetSdkDllPath()
@@ -280,6 +378,54 @@ namespace MangaAuthorSorter
             }
         }
 
+        internal static string BuildEverythingSourceQuery(
+            string sourceFull, bool recursive, string extQuery)
+        {
+            string quoted = "\"" + (sourceFull ?? "").Replace("\"", "") + "\"";
+            return (recursive ? quoted : "parent:" + quoted) + " " + (extQuery ?? "");
+        }
+
+        // Return true only when the same absolute directory can be found in
+        // Everything's directory index. This is a small index probe, not a
+        // recursive filesystem walk. Unindexed/offline paths still use the
+        // original filesystem safety fallback.
+        private static bool IsEverythingDirectoryIndexed(string source)
+        {
+            try
+            {
+                string full = Path.GetFullPath(source).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (String.IsNullOrWhiteSpace(full)) return false;
+                Native.Reset();
+                Native.SetMatchPath(true);
+                Native.SetMatchCase(false);
+                Native.SetMatchWholeWord(false);
+                Native.SetRegex(false);
+                Native.SetOffset(0);
+                Native.SetMax(32);
+                Native.SetRequestFlags(RequestFullPathAndFileName);
+                Native.SetSearch("folder:\"" + full.Replace("\"", "") + "\"");
+                if (!Native.Query(true)) return false;
+                UInt32 count = Native.GetNumResults();
+                StringBuilder buffer = new StringBuilder(32768);
+                for (UInt32 i = 0; i < count; i++)
+                {
+                    buffer.Length = 0;
+                    if (Native.GetResultFullPathName(i, buffer, (UInt32)buffer.Capacity) == 0)
+                        continue;
+                    if (String.Equals(
+                        buffer.ToString().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        full, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+            catch
+            {
+                // Uncertain index coverage must not hide actual files.
+            }
+            return false;
+        }
+
         private List<FileInfo> QueryEverything(
             string source,
             bool recursive,
@@ -287,6 +433,8 @@ namespace MangaAuthorSorter
             HashSet<string> blockedPaths,
             IEnumerable<string> extensions,
             List<ScanExcludedItem> excludedItems,
+            List<FileInfo> indexFiles,
+            List<SourceIndexFileSnapshot> indexEntries,
             out int discoveredCount,
             Action<ScanProgressInfo> progress,
             Func<bool> cancelRequested)
@@ -313,9 +461,15 @@ namespace MangaAuthorSorter
             Native.SetOffset(0);
             Native.SetMax(AllResults);
             Native.SetSort(SortDateModifiedDescending);
-            Native.SetRequestFlags(RequestFullPathAndFileName);
-            Native.SetSearch(
-                "\"" + sourceFull.Replace("\"", "") + "\" " + extQuery);
+            Native.SetRequestFlags(
+                RequestFullPathAndFileName |
+                RequestSize |
+                RequestDateCreated |
+                RequestDateModified);
+            // Everything 1.4+ supports parent:"absolute path" for immediate
+            // children. Avoid querying an entire subtree only to throw away
+            // every descendant when recursive scanning is disabled.
+            Native.SetSearch(BuildEverythingSourceQuery(sourceFull, recursive, extQuery));
 
             if (!Native.Query(true))
             {
@@ -348,18 +502,22 @@ namespace MangaAuthorSorter
                     ReportSearchProgress(progress, result.Count, 0, path, true);
                 }
 
-                if (String.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                // Everything already owns a live NTFS index. Do not touch the
+                // physical file here merely to verify a result that Everything
+                // has just returned; that would turn an index query back into a
+                // per-file filesystem scan.
+                if (String.IsNullOrWhiteSpace(path))
                     continue;
                 if (!FileTypeRules.ContainsExtension(normalizedExtensions, path))
                     continue;
 
-                FileInfo f;
-                try { f = new FileInfo(path); }
-                catch { continue; }
-
-                string parent =
-                    Path.GetFullPath(f.DirectoryName ?? "")
+                string parent;
+                try
+                {
+                    parent = Path.GetFullPath(Path.GetDirectoryName(path) ?? "")
                         .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                }
+                catch { continue; }
 
                 bool belongs =
                     recursive
@@ -369,6 +527,32 @@ namespace MangaAuthorSorter
 
                 if (!belongs) continue;
                 discoveredCount++;
+
+                FileInfo f;
+                try { f = new FileInfo(path); }
+                catch { continue; }
+                if (indexFiles != null) indexFiles.Add(f);
+                if (indexEntries != null)
+                {
+                    long size;
+                    NativeFileTime created;
+                    NativeFileTime modified;
+                    bool hasSize = Native.GetResultSize(i, out size);
+                    bool hasCreated = Native.GetResultDateCreated(i, out created);
+                    bool hasModified = Native.GetResultDateModified(i, out modified);
+                    indexEntries.Add(new SourceIndexFileSnapshot
+                    {
+                        FullPath = path,
+                        DirectoryPath = parent,
+                        FileName = Path.GetFileName(path) ?? "",
+                        Extension = Path.GetExtension(path) ?? "",
+                        FileSize = hasSize ? size : -1,
+                        CreationTimeUtc = hasCreated
+                            ? ToDateTimeUtc(created) : DateTime.MinValue,
+                        LastWriteTimeUtc = hasModified
+                            ? ToDateTimeUtc(modified) : DateTime.MinValue
+                    });
+                }
 
                 ScanExclusionMatch exclusion;
                 if (_scanExclusionStore != null &&
@@ -402,6 +586,8 @@ namespace MangaAuthorSorter
             HashSet<string> blockedPaths,
             IEnumerable<string> extensions,
             List<ScanExcludedItem> excludedItems,
+            List<FileInfo> indexFiles,
+            List<SourceIndexFileSnapshot> indexEntries,
             out int discoveredCount,
             Action<ScanProgressInfo> progress,
             Func<bool> cancelRequested)
@@ -434,6 +620,37 @@ namespace MangaAuthorSorter
                     if ((inspected % 64) == 0)
                         ReportSearchProgress(progress, result.Count, 0, path, true);
 
+                    if (!FileTypeRules.ContainsExtension(normalizedExtensions, path))
+                        continue;
+
+                    FileInfo indexed;
+                    try
+                    {
+                        indexed = new FileInfo(path);
+                        // The filesystem provider cannot avoid metadata IO, but it
+                        // reads it once and passes the snapshot forward so the DB
+                        // reconciliation does not read the same file again.
+                        long size = indexed.Length;
+                        DateTime modifiedUtc = indexed.LastWriteTimeUtc;
+                        DateTime createdUtc = indexed.CreationTimeUtc;
+                        if (indexFiles != null) indexFiles.Add(indexed);
+                        if (indexEntries != null)
+                        {
+                            indexEntries.Add(new SourceIndexFileSnapshot
+                            {
+                                FullPath = indexed.FullName,
+                                DirectoryPath = indexed.DirectoryName ?? "",
+                                FileName = indexed.Name ?? "",
+                                Extension = indexed.Extension ?? "",
+                                FileSize = size,
+                                LastWriteTimeUtc = modifiedUtc,
+                                CreationTimeUtc = createdUtc
+                            });
+                        }
+                    }
+                    catch { continue; }
+
+                    discoveredCount++;
                     ScanExclusionMatch exclusion;
                     if (_scanExclusionStore != null &&
                         _scanExclusionStore.TryMatchFilePath(path, source, out exclusion))
@@ -445,12 +662,7 @@ namespace MangaAuthorSorter
                     if (IsBlocked(path, blockedPaths))
                         continue;
 
-                    if (!FileTypeRules.ContainsExtension(normalizedExtensions, path))
-                        continue;
-
-                    discoveredCount++;
-                    try { result.Add(new FileInfo(path)); }
-                    catch { }
+                    result.Add(indexed);
                 }
 
                 if (!recursive) continue;
@@ -467,7 +679,11 @@ namespace MangaAuthorSorter
                         _scanExclusionStore.TryMatchFolderPath(child, source, out folderExclusion))
                     {
                         AddExcludedItem(excludedItems, child, true, folderExclusion);
-                        continue;
+                        // Exclusion is a query/view rule, not a FileIndex rule.
+                        // Keep walking the subtree so the durable canonical index
+                        // remains complete and can be reprojected instantly if
+                        // the exclusion rule later changes. Descendant files are
+                        // filtered below before they enter result.Files.
                     }
                     pending.Push(child);
                 }
@@ -584,6 +800,21 @@ namespace MangaAuthorSorter
                 normalized);
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeFileTime
+        {
+            public UInt32 LowDateTime;
+            public UInt32 HighDateTime;
+        }
+
+        private static DateTime ToDateTimeUtc(NativeFileTime value)
+        {
+            UInt64 raw = ((UInt64)value.HighDateTime << 32) | value.LowDateTime;
+            if (raw == 0 || raw > Int64.MaxValue) return DateTime.MinValue;
+            try { return DateTime.FromFileTimeUtc((Int64)raw); }
+            catch { return DateTime.MinValue; }
+        }
+
         private static class Native
         {
             public static void Reset() { if (IntPtr.Size == 8) Native64.Everything_Reset(); else Native32.Everything_Reset(); }
@@ -601,6 +832,12 @@ namespace MangaAuthorSorter
             public static UInt32 GetLastError() { return IntPtr.Size == 8 ? Native64.Everything_GetLastError() : Native32.Everything_GetLastError(); }
             public static UInt32 GetResultFullPathName(UInt32 i, StringBuilder b, UInt32 c)
             { return IntPtr.Size == 8 ? Native64.Everything_GetResultFullPathNameW(i, b, c) : Native32.Everything_GetResultFullPathNameW(i, b, c); }
+            public static bool GetResultSize(UInt32 i, out long size)
+            { return IntPtr.Size == 8 ? Native64.Everything_GetResultSize(i, out size) : Native32.Everything_GetResultSize(i, out size); }
+            public static bool GetResultDateCreated(UInt32 i, out NativeFileTime time)
+            { return IntPtr.Size == 8 ? Native64.Everything_GetResultDateCreated(i, out time) : Native32.Everything_GetResultDateCreated(i, out time); }
+            public static bool GetResultDateModified(UInt32 i, out NativeFileTime time)
+            { return IntPtr.Size == 8 ? Native64.Everything_GetResultDateModified(i, out time) : Native32.Everything_GetResultDateModified(i, out time); }
         }
 
         private static class Native64
@@ -618,6 +855,9 @@ namespace MangaAuthorSorter
             [DllImport("Everything64.dll")] internal static extern UInt32 Everything_GetNumResults();
             [DllImport("Everything64.dll")] internal static extern UInt32 Everything_GetLastError();
             [DllImport("Everything64.dll", CharSet = CharSet.Unicode)] internal static extern UInt32 Everything_GetResultFullPathNameW(UInt32 index, StringBuilder buffer, UInt32 bufferSize);
+            [DllImport("Everything64.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool Everything_GetResultSize(UInt32 index, out long size);
+            [DllImport("Everything64.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool Everything_GetResultDateCreated(UInt32 index, out NativeFileTime time);
+            [DllImport("Everything64.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool Everything_GetResultDateModified(UInt32 index, out NativeFileTime time);
             [DllImport("Everything64.dll")] internal static extern void Everything_Reset();
         }
 
@@ -636,6 +876,9 @@ namespace MangaAuthorSorter
             [DllImport("Everything32.dll")] internal static extern UInt32 Everything_GetNumResults();
             [DllImport("Everything32.dll")] internal static extern UInt32 Everything_GetLastError();
             [DllImport("Everything32.dll", CharSet = CharSet.Unicode)] internal static extern UInt32 Everything_GetResultFullPathNameW(UInt32 index, StringBuilder buffer, UInt32 bufferSize);
+            [DllImport("Everything32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool Everything_GetResultSize(UInt32 index, out long size);
+            [DllImport("Everything32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool Everything_GetResultDateCreated(UInt32 index, out NativeFileTime time);
+            [DllImport("Everything32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool Everything_GetResultDateModified(UInt32 index, out NativeFileTime time);
             [DllImport("Everything32.dll")] internal static extern void Everything_Reset();
         }
     }

@@ -21,13 +21,16 @@ namespace MangaAuthorSorter
             LanguageManager language,
             Font appFont,
             int movableCount,
-            int reviewCount)
+            int reviewCount,
+            int skippedCount,
+            string batchSize,
+            string targetFreeSize)
         {
             _language = language;
             Choice = ExecutionReviewChoice.Cancel;
 
             Text = LF("Dialog.ExecuteWithReview.Title", reviewCount);
-            ClientSize = new Size(590, 226);
+            ClientSize = new Size(590, 268);
             UiStyle.ApplyDialog(this, appFont);
 
             TableLayoutPanel root = new TableLayoutPanel();
@@ -49,9 +52,12 @@ namespace MangaAuthorSorter
 
             Label message = new Label();
             message.Text = LF(
-                "Dialog.ExecuteWithReview.Message",
+                "Dialog.ExecuteWithReview.MessageDetailed",
                 movableCount,
-                reviewCount);
+                reviewCount,
+                skippedCount,
+                batchSize,
+                targetFreeSize);
             message.ForeColor = UiStyle.Muted;
             message.Dock = DockStyle.Fill;
             message.TextAlign = ContentAlignment.TopLeft;

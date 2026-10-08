@@ -143,7 +143,42 @@ namespace MangaAuthorSorter
             if (!TryValidateTemplate(template, out normalized, out error))
                 normalized = DefaultTemplate;
 
-            return normalized.Replace(Token, author ?? "");
+            string rendered = normalized.Replace(Token, SanitizeAuthor(author));
+            rendered = rendered.TrimEnd(' ', '.');
+            if (rendered.Length == 0) rendered = "_";
+            if (rendered.Length > 255) rendered = rendered.Substring(0, 255).TrimEnd(' ', '.');
+            if (IsReservedWindowsName(rendered)) rendered = "_" + rendered;
+            return rendered;
+        }
+
+        // Provider tags and imported aliases are identity data, not guaranteed
+        // Windows path components. Preserve their visual meaning while mapping
+        // characters that Windows forbids in directory names to full-width
+        // equivalents. The original identity remains unchanged in matching and
+        // diagnostics; only the generated folder component is made path-safe.
+        private static string SanitizeAuthor(string author)
+        {
+            string value = author ?? "";
+            char[] chars = value.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                switch (chars[i])
+                {
+                    case '\\': chars[i] = '＼'; break;
+                    case '/': chars[i] = '／'; break;
+                    case ':': chars[i] = '：'; break;
+                    case '*': chars[i] = '＊'; break;
+                    case '?': chars[i] = '？'; break;
+                    case '"': chars[i] = '＂'; break;
+                    case '<': chars[i] = '＜'; break;
+                    case '>': chars[i] = '＞'; break;
+                    case '|': chars[i] = '｜'; break;
+                    default:
+                        if (chars[i] < 32) chars[i] = ' ';
+                        break;
+                }
+            }
+            return new string(chars).Trim();
         }
 
         public static List<string> NormalizeTemplates(

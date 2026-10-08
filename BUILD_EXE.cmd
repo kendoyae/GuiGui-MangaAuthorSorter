@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 setlocal
 cd /d "%~dp0"
 
@@ -26,6 +26,13 @@ if not exist "Build\CompilerSources.rsp" (
 )
 
 if not exist "bin\Release" mkdir "bin\Release"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "Build\ValidateLanguages.ps1"
+if errorlevel 1 (
+    echo [ERROR] Language validation failed.
+    if not defined NO_PAUSE pause
+    exit /b 1
+)
 
 echo Building GuiGui.exe...
 

@@ -47,3 +47,12 @@ External links such as GitHub, QQ, Afdian, Ko-fi and voidtools are provided for 
 Local scanning and sorting do not require continuous network access. Network access or external application/browser launching occurs only when the user invokes relevant optional features such as Everything SDK retrieval or project/feedback/support links.
 
 This file centralizes public copyright, third-party component and external-service notices for this release. Update it whenever licensing, third-party components or network services change.
+EhTagTranslation/Database
+https://github.com/EhTagTranslation/Database
+Database text is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 3.0 (CC BY-NC-SA 3.0), unless otherwise noted.
+GuiGui downloads this optional database only after an explicit user action; it is not bundled with the application.
+
+EhTagTranslation/EhTagDb
+https://github.com/EhTagTranslation/EhTagDb
+Licensed under GNU General Public License v3.0 only (GPL-3.0-only).
+GuiGui downloads this optional aggregate database only after an explicit user action; it is not bundled with the application.

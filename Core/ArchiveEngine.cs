@@ -1,39 +1,72 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace MangaAuthorSorter
 {
+    // One diagnostic accumulator per explicit scan. No mutable global timers:
+    // the independent simulation window can run at the same time.
+    internal sealed class ArchivePlanDiagnostics
+    {
+        public long IdentitySourceMs, TargetDirectoryMs, InitialIndexMs;
+        public long PrepareRecognitionMs, PlanLoopMs, IncrementalIndexMs;
+        public int InitialBuilds, IncrementalAdds, NewAuthorFolders;
+        public readonly HashSet<string> UniqueAuthors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public int UniqueAuthorCount { get { return UniqueAuthors.Count; } }
+    }
+
     internal sealed class ArchiveEngine
     {
-        private readonly AliasLibrary _aliasLibrary;
+        private sealed class PreparedRecognition
+        {
+            public List<string> Candidates = new List<string>();
+            public AuthorMatchResult Scored;
+        }
+
         private readonly AuthorEntityStore _entityStore;
         private readonly TagCleaningRuleStore _tagCleaningStore;
         private readonly object _targetCacheGate = new object();
         private string _targetCacheKey = "";
         private List<AuthorFolder> _cachedAuthorFolders;
         private SortedDictionary<int, string> _cachedAuthorGroups;
+        private readonly object _identityCacheGate = new object();
+        private string _publicCacheVersion = "";
+        private long _identityRevision = -1;
+        private long _entityCacheStamp = -1;
+        private List<AliasGroup> _cachedAliasGroups;
+        private AuthorEntityIndex _cachedEntityIndex;
 
-        public ArchiveEngine(AliasLibrary aliasLibrary)
-            : this(aliasLibrary, null, null)
+        public AuthorRecognitionMode RecognitionMode { get; set; }
+        public IParsedMetadataCache ParsedMetadataCache { get; set; }
+        public IRecognitionFactCache RecognitionFactCache { get; set; }
+        public IDestinationIndexCache DestinationIndexCache { get; set; }
+
+        public CacheDiagnosticsSnapshot GetCacheDiagnostics()
         {
+            CacheDiagnosticsSnapshot snapshot = new CacheDiagnosticsSnapshot();
+            ICacheLayerDiagnostics parsed = ParsedMetadataCache as ICacheLayerDiagnostics;
+            ICacheLayerDiagnostics recognition = RecognitionFactCache as ICacheLayerDiagnostics;
+            ICacheLayerDiagnostics destination = DestinationIndexCache as ICacheLayerDiagnostics;
+            if (parsed != null) { snapshot.ParsedHits = parsed.HitCount; snapshot.ParsedMisses = parsed.MissCount; }
+            if (recognition != null) { snapshot.RecognitionHits = recognition.HitCount; snapshot.RecognitionMisses = recognition.MissCount; }
+            if (destination != null) { snapshot.DestinationHits = destination.HitCount; snapshot.DestinationMisses = destination.MissCount; }
+            return snapshot;
         }
 
-        public ArchiveEngine(AliasLibrary aliasLibrary, AuthorEntityStore entityStore)
-            : this(aliasLibrary, entityStore, null)
+        public ArchiveEngine(AuthorEntityStore entityStore, TagCleaningRuleStore tagCleaningStore)
         {
-        }
-
-        public ArchiveEngine(
-            AliasLibrary aliasLibrary,
-            AuthorEntityStore entityStore,
-            TagCleaningRuleStore tagCleaningStore)
-        {
-            _aliasLibrary = aliasLibrary;
             _entityStore = entityStore;
             _tagCleaningStore = tagCleaningStore;
+            RecognitionMode = AuthorRecognitionMode.Classic;
+            List<AliasGroup> startupAliases;
+            AuthorEntityIndex startupEntities;
+            GetIdentitySourceCache(out startupAliases, out startupEntities);
         }
 
         public List<PlanItem> BuildPlan(
@@ -89,18 +122,50 @@ namespace MangaAuthorSorter
             IEnumerable<string> recognizedAuthorFolderTemplates,
             Action<ScanProgressInfo> progress,
             Func<bool> cancelRequested,
-            ScanProgressStage stage)
+            ScanProgressStage stage,
+            ArchivePlanDiagnostics diagnostics = null)
         {
-            List<PlanItem> initial =
-                new List<PlanItem>();
+            return BuildPlanUsingIndex(files, null, authorRoot, maxAuthors,
+                currentGroupTemplate, recognizedGroupTemplates, currentAuthorFolderTemplate,
+                recognizedAuthorFolderTemplates, progress, cancelRequested, stage, diagnostics);
+        }
+
+        // FileInfo still transports paths for legacy callers; metadata comes
+        // from Everything's/SourceIndex's own snapshot, not a second disk stat.
+        public List<PlanItem> BuildPlanUsingIndex(
+            List<FileInfo> files,
+            IDictionary<string, SourceIndexFileSnapshot> metadataByPath,
+            string authorRoot,
+            int maxAuthors,
+            string currentGroupTemplate,
+            IEnumerable<string> recognizedGroupTemplates,
+            string currentAuthorFolderTemplate,
+            IEnumerable<string> recognizedAuthorFolderTemplates,
+            Action<ScanProgressInfo> progress,
+            Func<bool> cancelRequested,
+            ScanProgressStage stage,
+            ArchivePlanDiagnostics diagnostics = null)
+        {
+            List<PlanItem> initial = new List<PlanItem>();
 
             if (files != null)
             {
                 foreach (FileInfo f in files)
                 {
                     ThrowIfCanceled(cancelRequested);
-                    initial.Add(
-                        NewBlankItem(f));
+                    SourceIndexFileSnapshot metadata;
+                    if (metadataByPath != null && f != null &&
+                        metadataByPath.TryGetValue(f.FullName, out metadata) && metadata != null)
+                    {
+                        initial.Add(new PlanItem {
+                            FileName = f.Name, SourcePath = f.FullName,
+                            FileSize = metadata.FileSize,
+                            LastWriteTime = metadata.LastWriteTimeUtc == DateTime.MinValue
+                                ? DateTime.MinValue : metadata.LastWriteTimeUtc.ToLocalTime()
+                        });
+                    }
+                    else
+                        initial.Add(NewBlankItem(f));
                 }
             }
 
@@ -114,7 +179,7 @@ namespace MangaAuthorSorter
                 recognizedAuthorFolderTemplates,
                 progress,
                 cancelRequested,
-                stage);
+                stage, null, 0, diagnostics);
         }
 
         public List<PlanItem> BuildPlanUntilMatches(
@@ -207,11 +272,72 @@ namespace MangaAuthorSorter
             Func<bool> cancelRequested,
             ScanProgressStage stage,
             ScanModeKind? stopMode = null,
-            int stopAfterMatches = 0)
+            int stopAfterMatches = 0,
+            ArchivePlanDiagnostics diagnostics = null)
+        {
+            return ResolvePlanCore(
+                sourceItems, authorRoot, maxAuthors, currentGroupTemplate,
+                recognizedGroupTemplates, currentAuthorFolderTemplate,
+                recognizedAuthorFolderTemplates, progress, cancelRequested, stage,
+                stopMode, stopAfterMatches, null, diagnostics);
+        }
+
+        internal List<PlanItem> ResolvePlanVirtual(
+            IEnumerable<PlanItem> sourceItems,
+            string authorRoot,
+            int maxAuthors,
+            string currentGroupTemplate,
+            IEnumerable<string> recognizedGroupTemplates,
+            string currentAuthorFolderTemplate,
+            IEnumerable<string> recognizedAuthorFolderTemplates,
+            SimulationArchiveEnvironment simulation,
+            Func<bool> cancelRequested)
+        {
+            return ResolvePlanVirtual(
+                sourceItems, authorRoot, maxAuthors, currentGroupTemplate,
+                recognizedGroupTemplates, currentAuthorFolderTemplate,
+                recognizedAuthorFolderTemplates, simulation, null, cancelRequested);
+        }
+
+        internal List<PlanItem> ResolvePlanVirtual(
+            IEnumerable<PlanItem> sourceItems,
+            string authorRoot,
+            int maxAuthors,
+            string currentGroupTemplate,
+            IEnumerable<string> recognizedGroupTemplates,
+            string currentAuthorFolderTemplate,
+            IEnumerable<string> recognizedAuthorFolderTemplates,
+            SimulationArchiveEnvironment simulation,
+            Action<ScanProgressInfo> progress,
+            Func<bool> cancelRequested)
+        {
+            if (simulation == null) throw new ArgumentNullException("simulation");
+            return ResolvePlanCore(
+                sourceItems, authorRoot, maxAuthors, currentGroupTemplate,
+                recognizedGroupTemplates, currentAuthorFolderTemplate,
+                recognizedAuthorFolderTemplates, progress, cancelRequested,
+                ScanProgressStage.Planning, null, 0, simulation, null);
+        }
+
+        private List<PlanItem> ResolvePlanCore(
+            IEnumerable<PlanItem> sourceItems,
+            string authorRoot,
+            int maxAuthors,
+            string currentGroupTemplate,
+            IEnumerable<string> recognizedGroupTemplates,
+            string currentAuthorFolderTemplate,
+            IEnumerable<string> recognizedAuthorFolderTemplates,
+            Action<ScanProgressInfo> progress,
+            Func<bool> cancelRequested,
+            ScanProgressStage stage,
+            ScanModeKind? stopMode,
+            int stopAfterMatches,
+            SimulationArchiveEnvironment simulation,
+            ArchivePlanDiagnostics diagnostics)
         {
             ThrowIfCanceled(cancelRequested);
 
-            if (!Directory.Exists(authorRoot))
+            if (simulation == null && !Directory.Exists(authorRoot))
             {
                 throw new DirectoryNotFoundException(
                     "迁移位置不存在：" +
@@ -252,23 +378,35 @@ namespace MangaAuthorSorter
                     normalizedAuthorFolderTemplate,
                     recognizedAuthorFolderTemplates);
 
-            List<AliasGroup> aliasGroups =
-                _aliasLibrary.Load();
+            List<AliasGroup> aliasGroups;
+            AuthorEntityIndex entityIndex;
+            long phaseTick = diagnostics != null ? Stopwatch.GetTimestamp() : 0;
+            GetIdentitySourceCache(out aliasGroups, out entityIndex);
+            if (diagnostics != null) diagnostics.IdentitySourceMs += ElapsedMs(phaseTick);
 
-            AuthorEntityIndex entityIndex =
-                _entityStore != null
-                    ? _entityStore.LoadIndex()
-                    : null;
 
             ThrowIfCanceled(cancelRequested);
 
+            phaseTick = diagnostics != null ? Stopwatch.GetTimestamp() : 0;
             List<AuthorFolder> existing;
             SortedDictionary<int, string> groups;
-            GetTargetDirectoryCache(
-                authorRoot, normalizedCurrent, recognized, normalizedAuthorFolderTemplate,
-                recognizedAuthorFolders, cancelRequested, out existing, out groups);
+            if (simulation != null)
+            {
+                existing = new List<AuthorFolder>(simulation.ExistingAuthors ?? new List<AuthorFolder>());
+                groups = simulation.Groups != null
+                    ? new SortedDictionary<int, string>(simulation.Groups)
+                    : new SortedDictionary<int, string>();
+            }
+            else
+            {
+                GetTargetDirectoryCache(
+                    authorRoot, normalizedCurrent, recognized, normalizedAuthorFolderTemplate,
+                    recognizedAuthorFolders, cancelRequested, out existing, out groups);
+            }
 
             ThrowIfCanceled(cancelRequested);
+
+            if (diagnostics != null) diagnostics.TargetDirectoryMs += ElapsedMs(phaseTick);
 
             // V1.9.6: Treat author folders planned earlier in the same scan as
             // searchable author identities too. This makes [creator] and
@@ -276,6 +414,17 @@ namespace MangaAuthorSorter
             // before that folder physically exists on disk.
             List<AuthorFolder> searchableAuthors =
                 new List<AuthorFolder>(existing);
+            phaseTick = diagnostics != null ? Stopwatch.GetTimestamp() : 0;
+            AuthorIndex authorIndex = AuthorIndex.Build(searchableAuthors, aliasGroups, entityIndex);
+            if (diagnostics != null)
+            {
+                diagnostics.InitialIndexMs += ElapsedMs(phaseTick);
+                diagnostics.InitialBuilds++;
+            }
+            AuthorScoringRules.Context scoringContext =
+                RecognitionMode == AuthorRecognitionMode.Scoring
+                    ? AuthorScoringRules.CreateContext(aliasGroups, entityIndex, _tagCleaningStore)
+                    : null;
             HashSet<string> roundTargetPaths =
                 new HashSet<string>(
                     StringComparer.OrdinalIgnoreCase);
@@ -284,8 +433,10 @@ namespace MangaAuthorSorter
 
             foreach (KeyValuePair<int, string> pair in groups)
             {
-                int count = 0;
-                try { count = Directory.GetDirectories(pair.Value).Length; } catch { }
+                int count = existing.Count(delegate(AuthorFolder folder)
+                {
+                    return folder != null && folder.GroupNumber == pair.Key;
+                });
                 groupCounts[pair.Key] = count;
             }
 
@@ -319,6 +470,13 @@ namespace MangaAuthorSorter
             }
 
             int planCurrent = 0;
+            phaseTick = diagnostics != null ? Stopwatch.GetTimestamp() : 0;
+            Dictionary<string, PreparedRecognition> preparedRecognitions =
+                useEarlyStop
+                    ? new Dictionary<string, PreparedRecognition>(StringComparer.OrdinalIgnoreCase)
+                    : PrepareRecognitionsInParallel(sourceSequence, searchableAuthors, aliasGroups, entityIndex, cancelRequested);
+            if (diagnostics != null) diagnostics.PrepareRecognitionMs += ElapsedMs(phaseTick);
+
 
             if (useEarlyStop)
             {
@@ -339,6 +497,7 @@ namespace MangaAuthorSorter
                     "");
             }
 
+            phaseTick = diagnostics != null ? Stopwatch.GetTimestamp() : 0;
             foreach (PlanItem original in sourceSequence)
             {
                 ThrowIfCanceled(cancelRequested);
@@ -359,7 +518,7 @@ namespace MangaAuthorSorter
 
                 if (original == null ||
                     String.IsNullOrWhiteSpace(original.SourcePath) ||
-                    !File.Exists(original.SourcePath))
+                    (simulation == null && !File.Exists(original.SourcePath)))
                 {
                     continue;
                 }
@@ -372,14 +531,16 @@ namespace MangaAuthorSorter
                 p.ManualTargetName = original.ManualTargetName ?? "";
                 p.ManualTargetAuthor = original.ManualTargetAuthor ?? "";
 
-                List<string> authorCandidates =
-                    AuthorRules.GetAuthorCandidatesFromFileName(
-                        Path.GetFileNameWithoutExtension(p.FileName),
-                        _tagCleaningStore);
+                PreparedRecognition prepared;
+                preparedRecognitions.TryGetValue(p.SourcePath ?? "", out prepared);
+                List<string> authorCandidates = prepared != null
+                    ? new List<string>(prepared.Candidates)
+                    : GetAuthorCandidates(p);
                 string author =
                     authorCandidates.Count > 0
                         ? authorCandidates[0]
                         : null;
+                AuthorMatchResult scoredMatch = prepared != null ? prepared.Scored : null;
 
                 // Deterministic fallback for untagged legacy files: an exact,
                 // complete existing folder identity at the filename start is
@@ -387,7 +548,7 @@ namespace MangaAuthorSorter
                 if (String.IsNullOrWhiteSpace(author))
                 {
                     string fileBaseName = Path.GetFileNameWithoutExtension(p.FileName);
-                    foreach (AuthorFolder folder in searchableAuthors)
+                    foreach (AuthorFolder folder in authorIndex.FindCandidateFolders(fileBaseName))
                     {
                         if (folder != null &&
                             (AuthorRules.StartsWithCompleteIdentity(fileBaseName, folder.AuthorName) ||
@@ -402,6 +563,41 @@ namespace MangaAuthorSorter
                     author = authorCandidates.Count > 0 ? authorCandidates[0] : null;
                 }
 
+                // The classic rules always run first. Scoring is only allowed
+                // to rescue a filename for which those rules found no author.
+                if (String.IsNullOrWhiteSpace(author) &&
+                    RecognitionMode == AuthorRecognitionMode.Scoring &&
+                    String.IsNullOrWhiteSpace(p.ManualTargetAuthor))
+                {
+                    string fileBaseName = Path.GetFileNameWithoutExtension(p.FileName);
+                    if (scoredMatch == null) scoredMatch = scoringContext.Match(fileBaseName, searchableAuthors);
+                    p.RecognitionScore = scoredMatch.Score;
+                    p.RecognitionRunnerUpScore = scoredMatch.RunnerUpScore;
+                    if (scoredMatch.Type == AuthorMatchType.NotFound && scoredMatch.Score > 0)
+                    {
+                        p.MatchWhy = scoredMatch.Why;
+                        p.EvidenceKind = RecognitionEvidenceKind.Scoring;
+                    }
+                    if (scoredMatch.Type == AuthorMatchType.Matched && scoredMatch.Folder != null)
+                    {
+                        author = !String.IsNullOrWhiteSpace(scoredMatch.Folder.PreferredIdentity)
+                            ? scoredMatch.Folder.PreferredIdentity
+                            : scoredMatch.Folder.AuthorName;
+                        authorCandidates.Clear();
+                        authorCandidates.Add(author);
+                    }
+                    else if (scoredMatch.Type == AuthorMatchType.Choice &&
+                             scoredMatch.Candidates.Count > 0)
+                    {
+                        AuthorFolder best = scoredMatch.Candidates[0];
+                        author = !String.IsNullOrWhiteSpace(best.PreferredIdentity)
+                            ? best.PreferredIdentity
+                            : best.AuthorName;
+                        authorCandidates.Clear();
+                        authorCandidates.Add(author);
+                    }
+                }
+
                 // A user may explicitly name an author from the context panel
                 // even when the file name cannot be parsed. Manual identity is
                 // authoritative for this item and lets the normal planner decide
@@ -414,10 +610,14 @@ namespace MangaAuthorSorter
                 }
 
                 p.Author = author ?? "";
+                if (diagnostics != null && !String.IsNullOrWhiteSpace(p.Author))
+                    diagnostics.UniqueAuthors.Add(AuthorRules.NormalizeText(p.Author));
 
                 if (String.IsNullOrWhiteSpace(author))
                 {
                     p.Status = "无法识别作者";
+                    p.StatusCode = PlanStatusCode.Unrecognized;
+                    p.EvidenceKind = RecognitionEvidenceKind.Unrecognized;
                     if (AddResolvedAndShouldStop(
                             resolved,
                             p,
@@ -432,16 +632,22 @@ namespace MangaAuthorSorter
 
                 bool manualTargetAvailable =
                     !String.IsNullOrWhiteSpace(p.ManualTargetDir) &&
-                    (Directory.Exists(p.ManualTargetDir) ||
+                    ((simulation != null
+                        ? existing.Any(delegate(AuthorFolder f)
+                          { return f != null && String.Equals(f.AuthorPath, p.ManualTargetDir, StringComparison.OrdinalIgnoreCase); })
+                        : Directory.Exists(p.ManualTargetDir)) ||
                      roundTargetPaths.Contains(p.ManualTargetDir));
 
                 if (manualTargetAvailable)
                 {
                     p.MatchedAs = !String.IsNullOrWhiteSpace(p.ManualTargetName) ? p.ManualTargetName : new DirectoryInfo(p.ManualTargetDir).Name;
                     p.MatchWhy = "手动指定作者文件夹；已写入作者别名库";
+                    p.EvidenceKind = RecognitionEvidenceKind.Manual;
                     p.TargetDir = p.ManualTargetDir;
                     p.TargetPath = Path.Combine(p.TargetDir, p.FileName);
-                    FinalizeMoveState(p, "手动指定作者文件夹");
+                    FinalizeMoveState(
+                        p, "手动指定作者文件夹", PlanStatusCode.ManualFolder,
+                        simulation != null ? simulation.ExistingTargetFiles : null);
                     if (AddResolvedAndShouldStop(
                             resolved,
                             p,
@@ -464,14 +670,21 @@ namespace MangaAuthorSorter
                         : author;
 
                 AuthorMatchResult match;
-                if (!String.IsNullOrWhiteSpace(p.ManualTargetAuthor))
+                if (scoredMatch != null &&
+                    scoredMatch.Type != AuthorMatchType.NotFound &&
+                    String.IsNullOrWhiteSpace(p.ManualTargetAuthor))
+                {
+                    match = scoredMatch;
+                }
+                else if (!String.IsNullOrWhiteSpace(p.ManualTargetAuthor))
                 {
                     match =
                         FindExistingAuthor(
                             matchAuthor,
                             searchableAuthors,
                             aliasGroups,
-                            entityIndex);
+                            entityIndex,
+                            authorIndex);
                 }
                 else
                 {
@@ -480,13 +693,67 @@ namespace MangaAuthorSorter
                             authorCandidates,
                             searchableAuthors,
                             aliasGroups,
-                            entityIndex);
+                            entityIndex,
+                            authorIndex);
+                }
+
+                // A classic NotFound result means the extracted identity would
+                // become a new author. Only now may scoring try to map it back
+                // to an existing local author. Existing classic matches and
+                // ambiguities are never overridden.
+                if (match.Type == AuthorMatchType.NotFound &&
+                    scoredMatch == null &&
+                    RecognitionMode == AuthorRecognitionMode.Scoring &&
+                    String.IsNullOrWhiteSpace(p.ManualTargetAuthor))
+                {
+                    string fileBaseName = Path.GetFileNameWithoutExtension(p.FileName);
+                    scoredMatch = scoringContext.Match(fileBaseName, searchableAuthors);
+                    p.RecognitionScore = scoredMatch.Score;
+                    p.RecognitionRunnerUpScore = scoredMatch.RunnerUpScore;
+                    if (scoredMatch.Type != AuthorMatchType.NotFound)
+                    {
+                        match = scoredMatch;
+                        if (scoredMatch.Type == AuthorMatchType.Matched && scoredMatch.Folder != null)
+                        {
+                            author = !String.IsNullOrWhiteSpace(scoredMatch.Folder.PreferredIdentity)
+                                ? scoredMatch.Folder.PreferredIdentity
+                                : scoredMatch.Folder.AuthorName;
+                            p.Author = author;
+                        }
+                    }
+                    else if (scoredMatch.Score > 0)
+                    {
+                        p.MatchWhy = scoredMatch.Why;
+                        p.EvidenceKind = RecognitionEvidenceKind.Scoring;
+                    }
+                }
+
+                // "Choice" is meaningful only when at least two distinct
+                // destination folders remain. A single candidate is a unique
+                // match and must never open an ambiguity dialog.
+                if (match.Type == AuthorMatchType.Choice)
+                {
+                    List<AuthorFolder> uniqueCandidates =
+                        UniqueFolders(match.Candidates);
+                    if (uniqueCandidates.Count == 1)
+                    {
+                        match = Result(
+                            AuthorMatchType.Matched,
+                            uniqueCandidates[0],
+                            "候选目录去重后唯一，已自动匹配");
+                    }
+                    else
+                    {
+                        match.Candidates = uniqueCandidates;
+                    }
                 }
 
                 if (match.Type == AuthorMatchType.Ambiguous)
                 {
                     p.MatchWhy = match.Why;
                     p.Status = "同作者识别有歧义，跳过";
+                    p.StatusCode = PlanStatusCode.Ambiguous;
+                    p.EvidenceKind = RecognitionEvidenceKind.Ambiguous;
                     if (AddResolvedAndShouldStop(
                             resolved,
                             p,
@@ -503,6 +770,8 @@ namespace MangaAuthorSorter
                 {
                     p.MatchWhy = match.Why;
                     p.Status = "作者候选需要确认";
+                    p.StatusCode = PlanStatusCode.CandidateConfirmation;
+                    p.EvidenceKind = RecognitionEvidenceKind.Ambiguous;
                     p.CanMove = false;
                     bool hasPlannedCandidate = false;
                     foreach (AuthorFolder c in match.Candidates)
@@ -559,18 +828,24 @@ namespace MangaAuthorSorter
                         // same destination.
                         matchWhy = "本轮扫描已识别为同一新作者";
                         statusText = "本轮新作者（复用目录）";
+                        p.StatusCode = PlanStatusCode.NewAuthorReuse;
+                        p.EvidenceKind = RecognitionEvidenceKind.NewAuthorReuse;
                     }
                     else
                     {
                         matchWhy = match.Why;
                         statusText = "匹配到已有作者";
+                        p.StatusCode = PlanStatusCode.Matched;
+                        p.EvidenceKind = match.EvidenceKind;
                     }
                 }
                 else
                 {
                     bool aliasAmbiguous;
-                    AliasGroup aliasGroup = _aliasLibrary.GetGroupForName(matchAuthor, aliasGroups, out aliasAmbiguous);
+                    AliasGroup aliasGroup = authorIndex.ResolveAlias(matchAuthor, out aliasAmbiguous);
                     string canonical, identity;
+                    bool publicDatabaseHit = false;
+                    bool personalEntityHit = false;
 
                     if (aliasGroup != null && !aliasAmbiguous)
                     {
@@ -587,8 +862,13 @@ namespace MangaAuthorSorter
                         if (entityMatch.Found && entityMatch.Entity != null &&
                             !String.IsNullOrWhiteSpace(entityMatch.Entity.CanonicalName))
                         {
-                            canonical = entityMatch.Entity.CanonicalName;
-                            identity = "entity:" + entityMatch.Entity.Id.ToString();
+                            canonical = GetEntityCanonicalIdentity(
+                                matchAuthor,
+                                entityMatch);
+                            publicDatabaseHit = entityMatch.FromPublicDatabase;
+                            personalEntityHit = !entityMatch.FromPublicDatabase;
+                            identity = (entityMatch.FromPublicDatabase ? "public-entity:" : "entity:") +
+                                entityMatch.Entity.Id.ToString();
                         }
                         else
                         {
@@ -603,6 +883,8 @@ namespace MangaAuthorSorter
                         matchedAs = canonical;
                         matchWhy = "本轮扫描已识别为同一新作者";
                         statusText = "本轮新作者（复用目录）";
+                        p.StatusCode = PlanStatusCode.NewAuthorReuse;
+                        p.EvidenceKind = RecognitionEvidenceKind.NewAuthorReuse;
                     }
                     else
                     {
@@ -635,20 +917,40 @@ namespace MangaAuthorSorter
                         newTargets[identity] = targetDir;
                         groupCounts[groupNumber] = GetCount(groupCounts, groupNumber) + 1;
                         matchedAs = canonical;
-                        matchWhy = !String.Equals(canonical, matchAuthor, StringComparison.Ordinal)
-                            ? "别名库统一为：" + canonical
-                            : "未找到已有作者，按新作者处理";
+                        matchWhy = publicDatabaseHit
+                            ? "公共作者库命中：" + canonical + "；未找到已有作者目录，按新作者处理"
+                            : personalEntityHit
+                                ? "个人作者实体命中：" + canonical + "；未找到已有作者目录，按新作者处理"
+                                : !String.Equals(canonical, matchAuthor, StringComparison.Ordinal)
+                                    ? "别名库统一为：" + canonical
+                                    : "未找到已有作者，按新作者处理";
                         statusText =
                             "新作者，计划放入 " +
                             groupName;
+                        p.StatusCode = PlanStatusCode.NewAuthor;
+                        p.StatusArgument = groupName;
+                        p.EvidenceKind = RecognitionEvidenceKind.NewAuthor;
 
-                        AddRoundAuthorTarget(
+                        long addTick = diagnostics != null ? Stopwatch.GetTimestamp() : 0;
+                        AuthorFolder addedFolder = AddRoundAuthorTarget(
                             searchableAuthors,
                             roundTargetPaths,
                             groupNumber,
                             canonical,
                             matchAuthor,
                             targetDir);
+                        if (addedFolder != null)
+                        {
+                            // A planned folder affects later matches immediately,
+                            // without rebuilding every existing name/alias bucket.
+                            authorIndex.AddPlannedFolder(addedFolder);
+                            if (diagnostics != null)
+                            {
+                                diagnostics.NewAuthorFolders++;
+                                diagnostics.IncrementalAdds++;
+                            }
+                        }
+                        if (diagnostics != null) diagnostics.IncrementalIndexMs += ElapsedMs(addTick);
                     }
                 }
 
@@ -656,13 +958,17 @@ namespace MangaAuthorSorter
                 {
                     matchWhy = "手动指定作者；已写入作者别名库；目标目录按当前列表重新规划";
                     statusText = "手动指定作者";
+                    p.StatusCode = PlanStatusCode.ManualAuthor;
+                    p.EvidenceKind = RecognitionEvidenceKind.Manual;
                 }
 
                 p.MatchedAs = matchedAs;
                 p.MatchWhy = matchWhy;
                 p.TargetDir = targetDir;
                 p.TargetPath = Path.Combine(targetDir, p.FileName);
-                FinalizeMoveState(p, statusText);
+                FinalizeMoveState(
+                    p, statusText, p.StatusCode,
+                    simulation != null ? simulation.ExistingTargetFiles : null);
                 if (AddResolvedAndShouldStop(
                             resolved,
                             p,
@@ -674,6 +980,7 @@ namespace MangaAuthorSorter
                     break;
             }
 
+            if (diagnostics != null) diagnostics.PlanLoopMs += ElapsedMs(phaseTick);
             ThrowIfCanceled(cancelRequested);
             if (stopMode.HasValue && stopAfterMatches > 0)
             {
@@ -694,7 +1001,98 @@ namespace MangaAuthorSorter
                     "");
             }
 
+            if (RecognitionFactCache != null)
+            {
+                foreach (PlanItem item in resolved) RecognitionFactCache.Store(item);
+                RecognitionFactCache.Flush();
+            }
+
             return resolved;
+        }
+
+        private static long ElapsedMs(long since)
+        {
+            return (long)((Stopwatch.GetTimestamp() - since) * 1000.0 / Stopwatch.Frequency);
+        }
+
+        private Dictionary<string, PreparedRecognition> PrepareRecognitionsInParallel(
+            IEnumerable<PlanItem> source,
+            List<AuthorFolder> folders,
+            List<AliasGroup> aliases,
+            AuthorEntityIndex entities,
+            Func<bool> cancelRequested)
+        {
+            List<PlanItem> items = (source ?? Enumerable.Empty<PlanItem>()).Where(delegate(PlanItem x)
+            { return x != null && !String.IsNullOrWhiteSpace(x.SourcePath); }).ToList();
+            ConcurrentDictionary<string, PreparedRecognition> prepared =
+                new ConcurrentDictionary<string, PreparedRecognition>(StringComparer.OrdinalIgnoreCase);
+            int workers = Math.Max(2, Math.Min(8, Environment.ProcessorCount - 1));
+            ParallelOptions options = new ParallelOptions { MaxDegreeOfParallelism = workers };
+            ThreadLocal<AuthorScoringRules.Context> scoring = RecognitionMode == AuthorRecognitionMode.Scoring
+                ? new ThreadLocal<AuthorScoringRules.Context>(delegate { return AuthorScoringRules.CreateContext(aliases, entities, _tagCleaningStore); })
+                : null;
+            try
+            {
+                Parallel.ForEach(items, options, delegate(PlanItem item)
+                {
+                    if (cancelRequested != null && cancelRequested()) throw new OperationCanceledException();
+                    string fileBase = Path.GetFileNameWithoutExtension(item.FileName ?? "");
+                    PreparedRecognition value = new PreparedRecognition();
+                    RecognitionCacheEntry recognition;
+                    List<string> cachedCandidates;
+                    if (RecognitionFactCache != null &&
+                        RecognitionFactCache.TryGet(item.SourcePath, item.FileName, out recognition))
+                    {
+                        value.Candidates = new List<string> { recognition.MatchedAuthor };
+                    }
+                    else if (ParsedMetadataCache != null &&
+                        ParsedMetadataCache.TryGetAuthorCandidates(item.SourcePath, item.FileName, out cachedCandidates))
+                    {
+                        value.Candidates = cachedCandidates;
+                    }
+                    else
+                    {
+                        value.Candidates = AuthorRules.GetAuthorCandidatesFromFileName(fileBase, _tagCleaningStore);
+                        if (ParsedMetadataCache != null)
+                            ParsedMetadataCache.StoreAuthorCandidates(item.SourcePath, item.FileName, value.Candidates);
+                    }
+                    if (value.Candidates.Count == 0 && scoring != null)
+                        value.Scored = scoring.Value.Match(fileBase, folders);
+                    prepared[item.SourcePath] = value;
+                });
+            }
+            catch (AggregateException ex)
+            {
+                if (ex.Flatten().InnerExceptions.All(delegate(Exception inner) { return inner is OperationCanceledException; }))
+                    throw new OperationCanceledException();
+                throw;
+            }
+            finally
+            {
+                if (scoring != null) scoring.Dispose();
+                if (ParsedMetadataCache != null) ParsedMetadataCache.Flush();
+            }
+            return new Dictionary<string, PreparedRecognition>(prepared, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private List<string> GetAuthorCandidates(PlanItem item)
+        {
+            RecognitionCacheEntry recognition;
+            List<string> candidates;
+            if (RecognitionFactCache != null &&
+                RecognitionFactCache.TryGet(item.SourcePath, item.FileName, out recognition))
+                return new List<string> { recognition.MatchedAuthor };
+            if (ParsedMetadataCache != null &&
+                ParsedMetadataCache.TryGetAuthorCandidates(item.SourcePath, item.FileName, out candidates))
+                return candidates;
+            candidates = AuthorRules.GetAuthorCandidatesFromFileName(
+                Path.GetFileNameWithoutExtension(item.FileName), _tagCleaningStore);
+            if (ParsedMetadataCache != null)
+            {
+                ParsedMetadataCache.StoreAuthorCandidates(item.SourcePath, item.FileName, candidates);
+                ParsedMetadataCache.Flush();
+            }
+            return candidates;
         }
 
         private static bool AddResolvedAndShouldStop(
@@ -782,7 +1180,7 @@ namespace MangaAuthorSorter
             progress(info);
         }
 
-        private static void AddRoundAuthorTarget(
+        private static AuthorFolder AddRoundAuthorTarget(
             List<AuthorFolder> searchableAuthors,
             HashSet<string> roundTargetPaths,
             int groupNumber,
@@ -791,10 +1189,10 @@ namespace MangaAuthorSorter
             string targetDir)
         {
             if (String.IsNullOrWhiteSpace(targetDir))
-                return;
+                return null;
 
             if (!roundTargetPaths.Add(targetDir))
-                return;
+                return null;
 
             AuthorFolder f = new AuthorFolder();
             f.GroupNumber = groupNumber;
@@ -812,6 +1210,7 @@ namespace MangaAuthorSorter
             IndexAuthorFolderName(f, originalAuthor);
 
             searchableAuthors.Add(f);
+            return f;
         }
 
         private static int GetCount(Dictionary<int, int> d, int key)
@@ -867,6 +1266,44 @@ namespace MangaAuthorSorter
                 }
             }
             ThrowIfCanceled(cancelRequested);
+            if (DestinationIndexCache != null)
+            {
+                List<DestinationFolderIndexEntry> persisted;
+                if (DestinationIndexCache.TryLoad(root, key, out persisted))
+                {
+                    List<AuthorFolder> loadedAuthors = new List<AuthorFolder>();
+                    SortedDictionary<int, string> loadedGroups = new SortedDictionary<int, string>();
+                    foreach (DestinationFolderIndexEntry entry in persisted)
+                    {
+                        if (entry.IsGroup)
+                        {
+                            loadedGroups[entry.GroupNumber] = entry.FullPath;
+                            continue;
+                        }
+                        AuthorFolder folder = new AuthorFolder
+                        {
+                            GroupNumber = entry.GroupNumber,
+                            AuthorName = !String.IsNullOrWhiteSpace(entry.LogicalAuthor)
+                                ? entry.LogicalAuthor : entry.FolderName,
+                            AuthorPath = entry.FullPath
+                        };
+                        folder.PreferredIdentity = AuthorRules.GetPreferredAuthorIdentity(folder.AuthorName);
+                        IndexAuthorFolderName(folder, folder.AuthorName);
+                        if (!String.Equals(folder.AuthorName, entry.FolderName, StringComparison.Ordinal))
+                            IndexAuthorFolderName(folder, entry.FolderName);
+                        loadedAuthors.Add(folder);
+                    }
+                    lock (_targetCacheGate)
+                    {
+                        _targetCacheKey = key;
+                        _cachedAuthorFolders = loadedAuthors;
+                        _cachedAuthorGroups = loadedGroups;
+                    }
+                    authors = new List<AuthorFolder>(loadedAuthors);
+                    groups = new SortedDictionary<int, string>(loadedGroups);
+                    return;
+                }
+            }
             List<AuthorFolder> builtAuthors = GetExistingAuthorFolders(root, recognizedGroups, recognizedAuthors);
             ThrowIfCanceled(cancelRequested);
             SortedDictionary<int, string> builtGroups = GetAuthorGroups(root, groupTemplate);
@@ -877,35 +1314,88 @@ namespace MangaAuthorSorter
                 _cachedAuthorFolders = builtAuthors;
                 _cachedAuthorGroups = builtGroups;
             }
+            if (DestinationIndexCache != null)
+                DestinationIndexCache.Store(root, key, builtGroups, builtAuthors);
             authors = new List<AuthorFolder>(builtAuthors);
             groups = new SortedDictionary<int, string>(builtGroups);
         }
 
         public void InvalidateTargetDirectoryCache()
         {
+            string previousRoot = "";
             lock (_targetCacheGate)
             {
+                int separator = (_targetCacheKey ?? "").IndexOf('|');
+                previousRoot = separator > 0 ? _targetCacheKey.Substring(0, separator) : "";
                 _targetCacheKey = "";
                 _cachedAuthorFolders = null;
                 _cachedAuthorGroups = null;
             }
+            if (DestinationIndexCache != null && previousRoot.Length > 0)
+                DestinationIndexCache.Invalidate(previousRoot);
         }
 
-        private static void FinalizeMoveState(PlanItem p, string normalStatus)
+        private void GetIdentitySourceCache(out List<AliasGroup> aliases, out AuthorEntityIndex entities)
+        {
+            string publicVersion = _entityStore != null ? _entityStore.PublicDatabaseVersion : "";
+            long entityStamp = GetFileStamp(_entityStore != null ? _entityStore.Path : "");
+            lock (_identityCacheGate)
+            {
+                if (_entityStore != null && (_cachedEntityIndex == null || entityStamp != _entityCacheStamp || publicVersion != _publicCacheVersion || _identityRevision != _entityStore.IdentityRevision))
+                {
+                    _cachedEntityIndex = _entityStore.LoadIndex();
+                    _entityCacheStamp = entityStamp;
+                    _cachedAliasGroups = _cachedEntityIndex.AliasGroups;
+                    _publicCacheVersion = publicVersion;
+                    _identityRevision = _entityStore.IdentityRevision;
+                }
+                aliases = _cachedAliasGroups ?? new List<AliasGroup>();
+                entities = _cachedEntityIndex;
+            }
+        }
+
+        public Func<string, string> CreateIdentityDependencyResolver()
+        {
+            List<AliasGroup> aliases; AuthorEntityIndex index;
+            GetIdentitySourceCache(out aliases, out index);
+            return index == null ? (Func<string, string>)(name => "") : index.GetDependencyVersion;
+        }
+
+        private static long GetFileStamp(string path)
+        {
+            try
+            {
+                if (String.IsNullOrWhiteSpace(path) || !File.Exists(path)) return 0;
+                FileInfo info = new FileInfo(path);
+                return info.LastWriteTimeUtc.Ticks ^ info.Length;
+            }
+            catch { return -1; }
+        }
+
+        private static void FinalizeMoveState(
+            PlanItem p,
+            string normalStatus,
+            PlanStatusCode normalStatusCode,
+            ISet<string> virtualExistingTargetFiles = null)
         {
             if (String.Equals(p.SourcePath, p.TargetPath, StringComparison.OrdinalIgnoreCase))
             {
                 p.Status = "文件已在目标作者文件夹";
+                p.StatusCode = PlanStatusCode.AlreadyInTarget;
                 p.CanMove = false;
             }
-            else if (File.Exists(p.TargetPath))
+            else if (virtualExistingTargetFiles != null
+                ? virtualExistingTargetFiles.Contains(p.TargetPath ?? "")
+                : File.Exists(p.TargetPath))
             {
                 p.Status = "目标已有同名文件，跳过";
+                p.StatusCode = PlanStatusCode.TargetExists;
                 p.CanMove = false;
             }
             else
             {
                 p.Status = normalStatus;
+                p.StatusCode = normalStatusCode;
                 p.CanMove = true;
             }
         }
@@ -1102,10 +1592,30 @@ namespace MangaAuthorSorter
             List<string> authors,
             List<AuthorFolder> existing,
             List<AliasGroup> aliasGroups,
-            AuthorEntityIndex entityIndex)
+            AuthorEntityIndex entityIndex,
+            AuthorIndex authorIndex)
         {
             if (authors == null || authors.Count == 0)
                 return Result(AuthorMatchType.NotFound, null, "未找到同作者目录");
+
+            // Once the first leading identity is uniquely known by the local
+            // entity database it is authoritative. Later bracket tags are
+            // commonly work/series metadata and must not create a false author
+            // conflict with the confirmed first tag.
+            string primaryAuthor = authors[0] ?? "";
+            if (entityIndex != null && !String.IsNullOrWhiteSpace(primaryAuthor))
+            {
+                AuthorEntityMatch primaryEntity = entityIndex.Resolve(primaryAuthor);
+                if (primaryEntity.Found && !primaryEntity.Ambiguous)
+                {
+                    return FindExistingAuthor(
+                        primaryAuthor,
+                        existing,
+                        aliasGroups,
+                        entityIndex,
+                        authorIndex);
+                }
+            }
 
             List<AuthorMatchResult> matched = new List<AuthorMatchResult>();
             List<AuthorMatchResult> hardChoices = new List<AuthorMatchResult>();
@@ -1115,7 +1625,7 @@ namespace MangaAuthorSorter
             {
                 if (String.IsNullOrWhiteSpace(candidate)) continue;
                 AuthorMatchResult r =
-                    FindExistingAuthor(candidate, existing, aliasGroups, entityIndex);
+                    FindExistingAuthor(candidate, existing, aliasGroups, entityIndex, authorIndex);
 
                 if (r.Type == AuthorMatchType.Ambiguous)
                 {
@@ -1227,11 +1737,38 @@ namespace MangaAuthorSorter
             string author,
             List<AuthorFolder> existing,
             List<AliasGroup> aliasGroups,
-            AuthorEntityIndex entityIndex)
+            AuthorEntityIndex entityIndex,
+            AuthorIndex authorIndex)
         {
+            // A complete local-folder identity is the strongest possible
+            // evidence. Resolve it before aliases or structured society/creator
+            // expansion so an exact "A (B)" folder cannot become ambiguous
+            // merely because A or B also appears in another folder.
+            string completeIdentity = AuthorRules.NormalizeText(
+                AuthorRules.GetDirectMatchIdentity(author));
+            List<AuthorFolder> completeHits =
+                authorIndex.FindExactDirect(completeIdentity);
+            if (completeHits.Count == 1)
+            {
+                return Result(
+                    AuthorMatchType.Matched,
+                    completeHits[0],
+                    "作者完整身份命中已有本地作者目录");
+            }
+            if (completeHits.Count > 1)
+            {
+                AuthorMatchResult completeChoice = Result(
+                    AuthorMatchType.Choice,
+                    null,
+                    "作者完整身份对应多个本地作者目录");
+                completeChoice.Candidates = completeHits;
+                return completeChoice;
+            }
+
             bool aliasAmbiguous;
-            AliasGroup candidateGroup = _aliasLibrary.GetGroupForName(author, aliasGroups, out aliasAmbiguous);
-            if (aliasAmbiguous) return Result(AuthorMatchType.Ambiguous, null, "作者候选同时命中多个自定义别名组");
+            AliasGroup candidateGroup = authorIndex.ResolveAlias(author, out aliasAmbiguous);
+            if (aliasAmbiguous)
+                return Result(AuthorMatchType.Ambiguous, null, "Reason.EntityConflict");
 
             if (candidateGroup != null)
             {
@@ -1239,7 +1776,7 @@ namespace MangaAuthorSorter
                 foreach (AuthorFolder folder in existing)
                 {
                     bool fa;
-                    AliasGroup fg = _aliasLibrary.GetGroupForName(folder.AuthorName, aliasGroups, out fa);
+                    AliasGroup fg = authorIndex.ResolveAlias(folder.AuthorName, out fa);
                     if (fg != null && !fa && String.Equals(fg.Canonical, candidateGroup.Canonical, StringComparison.Ordinal)) hits.Add(folder);
                 }
                 hits = UniqueFolders(hits);
@@ -1262,7 +1799,7 @@ namespace MangaAuthorSorter
                     string flat = AuthorRules.NormalizeText(
                         structured.Society + " " + structured.Creators[0]);
                     List<AuthorFolder> flatHits =
-                        FindFoldersByExactDirectNorm(flat, existing);
+                        authorIndex.FindExactDirect(flat);
                     if (flatHits.Count == 1)
                     {
                         return Result(
@@ -1277,18 +1814,19 @@ namespace MangaAuthorSorter
                 }
 
                 List<AuthorFolder> societyHits =
-                    FindSocietyFoldersForCandidate(
-                        structured.Society,
-                        existing);
+                    UniqueFolders(
+                        authorIndex.FindDirect(structured.Society),
+                        authorIndex.FindRole(structured.Society, 1),
+                        authorIndex.FindRole(structured.Society, 3));
 
                 List<AuthorFolder> creatorHits = new List<AuthorFolder>();
                 List<string> matchedCreators = new List<string>();
                 foreach (string creator in structured.Creators)
                 {
                     List<AuthorFolder> one =
-                        FindCreatorFoldersForCandidate(
-                            creator,
-                            existing);
+                        UniqueFolders(
+                            authorIndex.FindDirect(creator),
+                            authorIndex.FindRole(creator, 2));
                     if (one.Count > 0)
                     {
                         matchedCreators.Add(creator);
@@ -1298,6 +1836,7 @@ namespace MangaAuthorSorter
                 creatorHits = UniqueFolders(creatorHits);
 
                 List<AuthorFolder> union = UniqueFolders(societyHits, creatorHits);
+
                 string matchedCreatorLabel =
                     matchedCreators.Count > 0
                         ? JoinNames(matchedCreators)
@@ -1375,7 +1914,7 @@ namespace MangaAuthorSorter
             // Plain identity tags are matched role-aware before the older union
             // aliases. This lets [あめのまち] match the society part of
             // "あめのまち (すわっぷきのこ)" and keeps the UI reason accurate.
-            List<AuthorFolder> directHits = FindDirectFoldersForCandidate(author, existing);
+            List<AuthorFolder> directHits = authorIndex.FindDirect(author);
             if (directHits.Count == 1)
             {
                 string sourceCore = AuthorRules.GetDirectMatchIdentity(author);
@@ -1386,21 +1925,28 @@ namespace MangaAuthorSorter
                 return Result(AuthorMatchType.Matched, directHits[0], why);
             }
             if (directHits.Count > 1)
-                return Result(AuthorMatchType.Ambiguous, null, "同一个作者候选可匹配多个已有目录");
+            {
+                AuthorMatchResult directChoice = Result(
+                    AuthorMatchType.Choice,
+                    null,
+                    "同一个作者候选可匹配多个已有目录；请选择实际归属");
+                directChoice.Candidates = directHits;
+                return directChoice;
+            }
 
-            List<AuthorFolder> societyRoleHits = FindFoldersByRoleNorm(author, existing, 1);
+            List<AuthorFolder> societyRoleHits = authorIndex.FindRole(author, 1);
             if (societyRoleHits.Count == 1)
                 return Result(AuthorMatchType.Matched, societyRoleHits[0], "仅社团名「" + author + "」匹配到已有作者目录");
             if (societyRoleHits.Count > 1)
                 return ChoiceForRole(author, societyRoleHits, true);
 
-            List<AuthorFolder> creatorRoleHits = FindFoldersByRoleNorm(author, existing, 2);
+            List<AuthorFolder> creatorRoleHits = authorIndex.FindRole(author, 2);
             if (creatorRoleHits.Count == 1)
                 return Result(AuthorMatchType.Matched, creatorRoleHits[0], "仅作者名「" + author + "」匹配到已有作者目录");
             if (creatorRoleHits.Count > 1)
                 return ChoiceForRole(author, creatorRoleHits, false);
 
-            List<AuthorFolder> segmentHits = FindFoldersByRoleNorm(author, existing, 3);
+            List<AuthorFolder> segmentHits = authorIndex.FindRole(author, 3);
             if (segmentHits.Count == 1)
                 return Result(AuthorMatchType.Matched, segmentHits[0], "社团名称段「" + author + "」匹配到已有作者目录");
             if (segmentHits.Count > 1)
@@ -1414,27 +1960,20 @@ namespace MangaAuthorSorter
                 return r;
             }
 
-            HashSet<string> authorNorms = new HashSet<string>(AuthorRules.GetNorms(author), StringComparer.OrdinalIgnoreCase);
-            List<AuthorFolder> genericHits = new List<AuthorFolder>();
-            foreach (AuthorFolder folder in existing)
-            {
-                bool matchedNorm = false;
-                foreach (string n in folder.Norms)
-                {
-                    if (authorNorms.Contains(n))
-                    {
-                        matchedNorm = true;
-                        break;
-                    }
-                }
-                if (matchedNorm) genericHits.Add(folder);
-            }
-            genericHits = UniqueFolders(genericHits);
+            List<AuthorFolder> genericHits = authorIndex.FindGeneric(author);
 
             if (genericHits.Count == 1)
                 return Result(AuthorMatchType.Matched, genericHits[0], "作者目录名称标准化匹配（空白 / 全半角 / 括号容错）");
 
-            if (genericHits.Count > 1) return Result(AuthorMatchType.Ambiguous, null, "同一个作者候选可匹配多个已有目录");
+            if (genericHits.Count > 1)
+            {
+                AuthorMatchResult genericChoice = Result(
+                    AuthorMatchType.Choice,
+                    null,
+                    "同一个作者候选可匹配多个已有目录；请选择实际归属");
+                genericChoice.Candidates = genericHits;
+                return genericChoice;
+            }
 
             if (entityIndex != null)
             {
@@ -1444,13 +1983,13 @@ namespace MangaAuthorSorter
                     return Result(
                         AuthorMatchType.Ambiguous,
                         null,
-                        "本地作者实体库中同一名称对应多个作者实体");
+                        "Reason.EntityConflict");
                 }
 
                 if (entityMatch.Found && entityMatch.Entity != null)
                 {
                     List<AuthorFolder> entityHits =
-                        FindFoldersForEntityMatch(entityMatch, existing);
+                        FindFoldersForEntityMatch(entityMatch, authorIndex);
 
                     if (entityHits.Count == 1)
                     {
@@ -1474,7 +2013,7 @@ namespace MangaAuthorSorter
                 }
             }
 
-            List<AuthorFolder> cautiousHits = FindCautiousFoldersForCandidate(author, existing);
+            List<AuthorFolder> cautiousHits = authorIndex.FindCautious(author);
             if (cautiousHits.Count > 0)
             {
                 AuthorMatchResult cautious = Result(
@@ -1510,7 +2049,59 @@ namespace MangaAuthorSorter
             return String.Join(" / ", names.ToArray());
         }
 
-        private static void IndexAuthorFolderName(AuthorFolder folder, string name)
+        private static string GetEntityCanonicalIdentity(
+            string sourceIdentity,
+            AuthorEntityMatch entityMatch)
+        {
+            if (entityMatch == null || entityMatch.Entity == null)
+                return sourceIdentity ?? "";
+
+            string artist = entityMatch.Entity.CanonicalName ?? "";
+            StructuredAuthorParts parts =
+                AuthorRules.GetStructuredAuthorParts(sourceIdentity);
+            if (parts == null || String.IsNullOrWhiteSpace(parts.Society))
+                return artist;
+
+            HashSet<string> societyNorms = new HashSet<string>(
+                AuthorRules.GetNorms(parts.Society),
+                StringComparer.OrdinalIgnoreCase);
+            List<CircleEntityRecord> matchedGroups =
+                new List<CircleEntityRecord>();
+
+            foreach (CircleEntityRecord group in entityMatch.RelatedGroups)
+            {
+                if (group == null) continue;
+                bool matched = false;
+                foreach (string name in new string[]
+                {
+                    group.CanonicalName,
+                    group.RomanName,
+                    group.EHGroupTag,
+                    group.NHGroupTag
+                })
+                {
+                    foreach (string norm in AuthorRules.GetNorms(name ?? ""))
+                    {
+                        if (!societyNorms.Contains(norm)) continue;
+                        matched = true;
+                        break;
+                    }
+                    if (matched) break;
+                }
+                if (matched) matchedGroups.Add(group);
+            }
+
+            if (matchedGroups.Count != 1)
+                return artist;
+
+            string groupName =
+                !String.IsNullOrWhiteSpace(matchedGroups[0].CanonicalName)
+                    ? matchedGroups[0].CanonicalName
+                    : parts.Society;
+            return groupName + " (" + artist + ")";
+        }
+
+        internal static void IndexAuthorFolderName(AuthorFolder folder, string name)
         {
             if (folder == null || String.IsNullOrWhiteSpace(name)) return;
 
@@ -1662,7 +2253,26 @@ namespace MangaAuthorSorter
 
         private static AuthorMatchResult Result(AuthorMatchType type, AuthorFolder folder, string why)
         {
-            AuthorMatchResult r = new AuthorMatchResult(); r.Type = type; r.Folder = folder; r.Why = why; return r;
+            AuthorMatchResult r = new AuthorMatchResult();
+            r.Type = type;
+            r.Folder = folder;
+            r.Why = why;
+            r.EvidenceKind = ClassifyEvidence(type, why);
+            return r;
+        }
+
+        private static RecognitionEvidenceKind ClassifyEvidence(AuthorMatchType type, string why)
+        {
+            string value = why ?? "";
+            if (type == AuthorMatchType.Ambiguous || type == AuthorMatchType.Choice) return RecognitionEvidenceKind.Ambiguous;
+            if (value.StartsWith("评分识别：", StringComparison.Ordinal)) return RecognitionEvidenceKind.Scoring;
+            if (value.StartsWith("作者实体库：", StringComparison.Ordinal)) return RecognitionEvidenceKind.Entity;
+            if (value.StartsWith("作者别名库：", StringComparison.Ordinal) || value.StartsWith("别名库统一为：", StringComparison.Ordinal)) return RecognitionEvidenceKind.Alias;
+            if (value.StartsWith("仅社团名", StringComparison.Ordinal) || value.StartsWith("社团名称段", StringComparison.Ordinal)) return RecognitionEvidenceKind.Society;
+            if (value.StartsWith("仅作者名", StringComparison.Ordinal)) return RecognitionEvidenceKind.Author;
+            if (value.IndexOf("标准化匹配", StringComparison.Ordinal) >= 0) return RecognitionEvidenceKind.Normalized;
+            if (type == AuthorMatchType.Matched) return RecognitionEvidenceKind.Direct;
+            return RecognitionEvidenceKind.None;
         }
 
         private static List<AuthorFolder> FindFoldersForCandidate(string candidate, List<AuthorFolder> existing)
@@ -1680,7 +2290,7 @@ namespace MangaAuthorSorter
 
         private static List<AuthorFolder> FindFoldersForEntityMatch(
             AuthorEntityMatch entityMatch,
-            List<AuthorFolder> existing)
+            AuthorIndex authorIndex)
         {
             List<AuthorFolder> hits = new List<AuthorFolder>();
             if (entityMatch == null || !entityMatch.Found) return hits;
@@ -1688,11 +2298,11 @@ namespace MangaAuthorSorter
             foreach (string name in entityMatch.IdentityNames ?? new List<string>())
             {
                 if (String.IsNullOrWhiteSpace(name)) continue;
-                hits.AddRange(FindDirectFoldersForCandidate(name, existing));
-                hits.AddRange(FindFoldersByRoleNorm(name, existing, 1));
-                hits.AddRange(FindFoldersByRoleNorm(name, existing, 2));
-                hits.AddRange(FindFoldersByRoleNorm(name, existing, 3));
-                hits.AddRange(FindFoldersForCandidate(name, existing));
+                hits.AddRange(authorIndex.FindDirect(name));
+                hits.AddRange(authorIndex.FindRole(name, 1));
+                hits.AddRange(authorIndex.FindRole(name, 2));
+                hits.AddRange(authorIndex.FindRole(name, 3));
+                hits.AddRange(authorIndex.FindGeneric(name));
             }
 
             return UniqueFolders(hits);

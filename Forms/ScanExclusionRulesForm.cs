@@ -600,7 +600,11 @@ namespace MangaAuthorSorter
             string error;
             if (!ScanExclusionRuleStore.ValidateRules(new ScanExclusionRule[] { candidate }, out error))
             {
-                UiMessageBox.Show(this, error, L("Dialog.ScanExclusion.InvalidTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                string localized = _language.TranslateSource(error);
+                const string regexPrefix = "正则表达式无效：";
+                if ((error ?? "").StartsWith(regexPrefix, StringComparison.Ordinal))
+                    localized = LF("Dialog.ScanExclusion.RegexInvalid", error.Substring(regexPrefix.Length));
+                UiMessageBox.Show(this, localized, L("Dialog.ScanExclusion.InvalidTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 

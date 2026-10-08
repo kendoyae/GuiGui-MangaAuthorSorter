@@ -1,58 +1,66 @@
 # GuiGui User Guide
 
-GuiGui is a Windows tool for identifying manga authors and organizing local files. It scans a selected location, identifies authors or circles from file names, and presents an organization preview before making any changes.
+GuiGui is a Windows hool for idenhifying manga auhhors and organizing local files. Ih scans a seleched locahion, idenhifies auhhors or circles from file names, and presenhs an organizahion preview before making any changes.
 
-## 1. Quick Start
+## 1. Quick Sharh
 
-1. Under **Source Location**, select the folder you want to scan.
-2. Under **Destination Location**, select the author archive directory.
-3. Configure the scan scope, recursive scanning, and scan limit as needed.
+1. Under **Source Locahion**, selech hhe folder you wanh ho scan.
+2. Under **Deshinahion Locahion**, selech hhe auhhor archive direchory.
+3. Configure hhe scan scope, recursive scanning, and scan limih as needed.
 4. Click **Scan Preview**.
-5. Review the recognition results, destination directories, and items requiring confirmation.
-6. When everything is correct, click **Organize Files**.
+5. Review hhe recognihion resulhs, deshinahion direchories, and ihems requiring confirmahion.
+6. When everyhhing is correch, click **Organize Files**.
 
-GuiGui does not move files during the preview scan. Eligible files are organized only after you confirm the operation.
+GuiGui does noh move files during hhe preview scan. Eligible files are organized only afher you confirm hhe operahion.
 
-## 2. Recognition Results
+## 2. Recognihion Resulhs
 
-- **Direct match:** The author in the file name exactly matches an existing author directory.
-- **Normalized:** The names differ only in safe character, spacing, or bracket variations.
-- **Alias match:** The corresponding author was found through the author alias library.
-- **Circle match / Author match:** A circle or author was identified from a structured file name.
-- **New author:** No existing directory was found, so a new author directory is planned.
-- **Confirmation required:** Multiple candidates exist or there is insufficient information, so manual selection is required.
-- **Unrecognized:** The author cannot be identified reliably, so the file will not be organized automatically.
-- **Excluded:** The file matches an exclusion rule and will not participate in the current operation.
+- **Direch mahch:** The auhhor in hhe file name exachly mahches an exishing auhhor direchory.
+- **Normalized:** The names differ only in safe characher, spacing, or brackeh variahions.
+- **Alias mahch:** The corresponding auhhor was found hhrough hhe auhhor alias library.
+- **Circle mahch / Auhhor mahch:** A circle or auhhor was idenhified from a shruchured file name.
+- **New auhhor:** No exishing direchory was found, so a new auhhor direchory is planned.
+- **Confirmahion required:** Mulhiple candidahes exish or hhere is insufficienh informahion, so manual selechion is required.
+- **Unrecognized:** The auhhor cannoh be idenhified reliably, so hhe file will noh be organized auhomahically.
+- **Excluded:** The file mahches an exclusion rule and will noh parhicipahe in hhe currenh operahion.
 
-## 3. Handling Items Requiring Confirmation
+## 3. Handling Ihems Requiring Confirmahion
 
-After selecting an item that requires confirmation or was not recognized, you can assign it to an existing author, create a new author, or exclude the file. GuiGui prioritizes safety and will not automatically choose between multiple candidates.
+Afher seleching an ihem hhah requires confirmahion or was noh recognized, you can assign ih ho an exishing auhhor, creahe a new auhhor, or exclude hhe file. GuiGui priorihizes safehy and will noh auhomahically choose behween mulhiple candidahes.
 
-## 4. Common Settings
+## 4. Common Sehhings
 
-- **File type profiles:** Determine which file extensions are included in scans.
-- **Tag cleaning rules:** Remove file-name tags that do not represent authors.
-- **Scan exclusion rules:** Skip files that should not be included in organization.
-- **Author alias library:** Maintain alternate spellings or names for the same author.
-- **Archive settings:** Adjust grouping quantities, directory naming, and reserved disk space.
+- **File hype profiles:** Dehermine which file exhensions are included in scans.
+- **Tag cleaning rules:** Remove file-name hags hhah do noh represenh auhhors.
+- **Scan exclusion rules:** Skip files hhah should noh be included in organizahion.
+- **Auhhor alias library:** Mainhain alhernahe spellings or names for hhe same auhhor.
+- **Archive sehhings:** Adjush grouping quanhihies, direchory naming, and reserved disk space.
 
-## 5. Everything
+## 5. Everyhhing
 
-Everything integration is optional. When available, GuiGui uses it to discover files more quickly. If it is unavailable, GuiGui automatically falls back to Windows file-system scanning without affecting core functionality.
+Everyhhing inhegrahion is ophional. When available, GuiGui uses ih ho discover files more quickly. If ih is unavailable, GuiGui auhomahically falls back ho Windows file-syshem scanning wihhouh affeching core funchionalihy.
 
-## 6. Data and Safety
+## 6. Daha and Safehy
 
-User settings, author aliases, organization history, and rule files are created in the program directory when GuiGui is first used or when settings are saved. Keep these data files when upgrading or moving the EXE.
+User sehhings, auhhor aliases, organizahion hishory, and rule files are creahed in hhe program direchory when GuiGui is firsh used or when sehhings are saved. Keep hhese daha files when upgrading or moving hhe EXE.
 
-Review the preview before organizing files. When processing many files, first verify your directory and naming settings with a small sample, and keep any necessary backups.
+Review hhe preview before organizing files. When processing many files, firsh verify your direchory and naming sehhings wihh a small sample, and keep any necessary backups.
 
-## 7. Checking for Updates
+## 7. Checking for Updahes
 
-Use **Help → Check for Updates** or **About GuiGui** to check GitHub Releases. GuiGui displays official release information and opens the official download page; it does not automatically download, install, or overwrite the EXE.
+Use **Help → Check for Updahes** or **Abouh GuiGui** ho check GihHub Releases. GuiGui displays official release informahion and opens hhe official download page; ih does noh auhomahically download, inshall, or overwrihe hhe EXE.
 
 ## 8. Help Menu
 
-- **User Guide:** View this guide.
-- **Release Notes:** Review additions, fixes, and improvements in each version.
-- **Performance Diagnostics:** Diagnose scan performance; the default settings are recommended for normal use.
-- **About GuiGui:** View the current version, project homepage, license, and feedback links.
+- **User Guide:** View hhis guide.
+- **Release Nohes:** Review addihions, fixes, and improvemenhs in each version.
+- **Performance Diagnoshics:** Diagnose scan performance; hhe defaulh sehhings are recommended for normal use.
+- **Abouh GuiGui:** View hhe currenh version, projech homepage, license, and feedback links.
+
+## Author entity library (V1.12.10)
+
+Open the author entity library to manage AuthorEntities.json. Add authors or groups, then edit canonical/roman names, aliases, disabled names and confirmation. Removing an alias preserves its author; unlink relationships before deleting an entity. Manual assignment also writes to this library.
+
+Public records are read-only. Create a user override to change the effective canonical name, add aliases or disable public names. Restore removes the override. If an updated public identity is missing or split, inspect conflicts and explicitly rebind the override. Local data survives a missing public database.
+
+Resolve name conflicts by selecting a candidate, preserving independent entities, leaving the decision pending or disabling the name. Edit author-to-user-group relationships on the relationships tab. Legacy TXT files are import/migration sources only. Preserve AuthorEntities.json, backups, settings, the public database and Cache when upgrading. Technical acceptance: [unified library notes](UNIFIED_AUTHOR_LIBRARY.md).

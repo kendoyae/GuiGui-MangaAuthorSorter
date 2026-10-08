@@ -31,12 +31,17 @@ namespace MangaAuthorSorter
             new List<string>();
 
         public bool OnlineAuthorLookupEnabled = false;
-        public string OnlineAuthorProvider = "Danbooru";
+        public string OnlineAuthorProvider = "EvidenceChain";
         public bool SaveOnlineAuthorCache = true;
         public int MaxOnlineLookupsPerScan = 20;
+        public bool UseLocalAuthorReference = true;
+        public bool UseEhentaiLookup = true;
+        public bool UseNhentaiLookup = true;
+        public string NhentaiApiKey = "";
         public bool PerformanceDiagnosticsEnabled = false;
         public bool ScanWarmupEnabled = true;
         public bool EverythingEnabled = true;
+        public AuthorRecognitionMode RecognitionMode = AuthorRecognitionMode.Classic;
         public DateTime? LastUpdateCheckUtc;
 
         // 仅用于从 V1.5 / V1.5.2 自动迁移到
@@ -152,6 +157,12 @@ namespace MangaAuthorSorter
                             bool parsedEverything;
                             if (Boolean.TryParse(decoded, out parsedEverything)) data.EverythingEnabled = parsedEverything;
                         }
+                        else if (String.Equals(key, "RecognitionMode", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.RecognitionMode = String.Equals(decoded, "Scoring", StringComparison.OrdinalIgnoreCase)
+                                ? AuthorRecognitionMode.Scoring
+                                : AuthorRecognitionMode.Classic;
+                        }
                         else if (String.Equals(key, "LastUpdateCheckUtc", StringComparison.OrdinalIgnoreCase))
                         {
                             DateTime parsedCheck;
@@ -236,9 +247,9 @@ namespace MangaAuthorSorter
                                      "OnlineAuthorProvider",
                                      StringComparison.OrdinalIgnoreCase))
                         {
-                            data.OnlineAuthorProvider = String.IsNullOrWhiteSpace(decoded)
-                                ? "Danbooru"
-                                : decoded.Trim();
+                            // Migrate the removed single-site provider setting.
+                            // The resolver now owns source routing as one chain.
+                            data.OnlineAuthorProvider = "EvidenceChain";
                         }
                         else if (String.Equals(
                                      key,
@@ -257,6 +268,22 @@ namespace MangaAuthorSorter
                             int value;
                             if (Int32.TryParse(decoded, out value) && value >= 1 && value <= 100)
                                 data.MaxOnlineLookupsPerScan = value;
+                        }
+                        else if (String.Equals(key, "UseLocalAuthorReference", StringComparison.OrdinalIgnoreCase))
+                        {
+                            bool value; if (Boolean.TryParse(decoded, out value)) data.UseLocalAuthorReference = value;
+                        }
+                        else if (String.Equals(key, "UseEhentaiLookup", StringComparison.OrdinalIgnoreCase))
+                        {
+                            bool value; if (Boolean.TryParse(decoded, out value)) data.UseEhentaiLookup = value;
+                        }
+                        else if (String.Equals(key, "UseNhentaiLookup", StringComparison.OrdinalIgnoreCase))
+                        {
+                            bool value; if (Boolean.TryParse(decoded, out value)) data.UseNhentaiLookup = value;
+                        }
+                        else if (String.Equals(key, "NhentaiApiKey", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.NhentaiApiKey = decoded;
                         }
                         else if (String.Equals(
                                      key,
@@ -537,15 +564,23 @@ namespace MangaAuthorSorter
             bool enabled,
             string provider,
             bool saveCache,
-            int maxLookupsPerScan)
+            int maxLookupsPerScan,
+            bool useLocalReference,
+            bool useEhentai,
+            bool useNhentai,
+            string nhentaiApiKey)
         {
             UserSettingsData current = Load();
             current.OnlineAuthorLookupEnabled = enabled;
             current.OnlineAuthorProvider = String.IsNullOrWhiteSpace(provider)
-                ? "Danbooru"
+                ? "EvidenceChain"
                 : provider.Trim();
             current.SaveOnlineAuthorCache = saveCache;
             current.MaxOnlineLookupsPerScan = Math.Max(1, Math.Min(100, maxLookupsPerScan));
+            current.UseLocalAuthorReference = useLocalReference;
+            current.UseEhentaiLookup = useEhentai;
+            current.UseNhentaiLookup = useNhentai;
+            current.NhentaiApiKey = (nhentaiApiKey ?? "").Trim();
             Save(current);
         }
 
@@ -603,6 +638,13 @@ namespace MangaAuthorSorter
             current.PerformanceDiagnosticsEnabled = diagnostics;
             current.ScanWarmupEnabled = warmup;
             current.EverythingEnabled = everything;
+            Save(current);
+        }
+
+        public void UpdateRecognitionMode(AuthorRecognitionMode mode)
+        {
+            UserSettingsData current = Load();
+            current.RecognitionMode = mode;
             Save(current);
         }
 
@@ -695,12 +737,17 @@ namespace MangaAuthorSorter
                 lines.Add(
                     "MaxOnlineLookupsPerScan=" +
                     Encode(data.MaxOnlineLookupsPerScan.ToString()));
+                lines.Add("UseLocalAuthorReference=" + Encode(data.UseLocalAuthorReference.ToString()));
+                lines.Add("UseEhentaiLookup=" + Encode(data.UseEhentaiLookup.ToString()));
+                lines.Add("UseNhentaiLookup=" + Encode(data.UseNhentaiLookup.ToString()));
+                lines.Add("NhentaiApiKey=" + Encode(data.NhentaiApiKey ?? ""));
 
                 lines.Add(
                     "PerformanceDiagnosticsEnabled=" +
                     Encode(data.PerformanceDiagnosticsEnabled.ToString()));
                 lines.Add("ScanWarmupEnabled=" + Encode(data.ScanWarmupEnabled.ToString()));
                 lines.Add("EverythingEnabled=" + Encode(data.EverythingEnabled.ToString()));
+                lines.Add("RecognitionMode=" + Encode(data.RecognitionMode == AuthorRecognitionMode.Scoring ? "Scoring" : "Classic"));
                 lines.Add("LastUpdateCheckUtc=" + Encode(data.LastUpdateCheckUtc.HasValue
                     ? data.LastUpdateCheckUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture)
                     : ""));

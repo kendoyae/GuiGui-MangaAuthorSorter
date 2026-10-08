@@ -34,6 +34,8 @@ namespace MangaAuthorSorter
             Color.FromArgb(8, 145, 178);      // #0891B2
         private static readonly Color AuthorColor =
             Color.FromArgb(67, 56, 202);      // #4338CA
+        private static readonly Color ScoringColor =
+            Color.FromArgb(2, 132, 199);      // #0284C7
         private static readonly Color NewAuthorColor =
             Color.FromArgb(0, 137, 123);      // #00897B
         private static readonly Color NewReuseColor =
@@ -55,6 +57,9 @@ namespace MangaAuthorSorter
 
             if (String.Equals(item.PlanConflictKind, "batch-target", StringComparison.OrdinalIgnoreCase))
                 return Make("[!]", "target-conflict", "目标重名冲突", ErrorColor);
+
+            RecognitionVisual typed = ResolveTyped(item.EvidenceKind, item.StatusCode);
+            if (typed != null) return typed;
 
             // Manual assignment has the highest priority.
             if (Contains(why, "手动指定作者文件夹") ||
@@ -96,6 +101,11 @@ namespace MangaAuthorSorter
                 return Make("[ID]", "entity", "实体匹配", EntityColor);
             }
 
+            if (why.StartsWith("评分识别：", StringComparison.Ordinal))
+            {
+                return Make("[S]", "scoring", "评分识别", ScoringColor);
+            }
+
             if (why.StartsWith("作者别名库：", StringComparison.Ordinal) ||
                 why.StartsWith("别名库统一为：", StringComparison.Ordinal))
             {
@@ -128,6 +138,29 @@ namespace MangaAuthorSorter
             return Make("", "", "", Color.DimGray);
         }
 
+        private static RecognitionVisual ResolveTyped(RecognitionEvidenceKind kind, PlanStatusCode status)
+        {
+            if (status == PlanStatusCode.BatchTargetConflict) return Make("[!]", "target-conflict", "", ErrorColor);
+            if (status == PlanStatusCode.ManualAuthor || status == PlanStatusCode.ManualFolder || kind == RecognitionEvidenceKind.Manual)
+                return Make("[★]", "manual", "", ManualColor);
+            if (status == PlanStatusCode.Unrecognized || kind == RecognitionEvidenceKind.Unrecognized)
+                return Make("[×]", "unrecognized", "", ErrorColor);
+            if (status == PlanStatusCode.Ambiguous || status == PlanStatusCode.CandidateConfirmation || kind == RecognitionEvidenceKind.Ambiguous)
+                return Make("[!]", "ambiguous", "", AmbiguousColor);
+            if (status == PlanStatusCode.NewAuthorReuse || kind == RecognitionEvidenceKind.NewAuthorReuse)
+                return Make("[+]", "new-reuse", "", NewReuseColor);
+            if (status == PlanStatusCode.NewAuthor || kind == RecognitionEvidenceKind.NewAuthor)
+                return Make("[+]", "new", "", NewAuthorColor);
+            if (kind == RecognitionEvidenceKind.Entity) return Make("[ID]", "entity", "", EntityColor);
+            if (kind == RecognitionEvidenceKind.Scoring) return Make("[S]", "scoring", "", ScoringColor);
+            if (kind == RecognitionEvidenceKind.Alias) return Make("[↔]", "alias", "", AliasColor);
+            if (kind == RecognitionEvidenceKind.Society) return Make("[◆]", "society", "", SocietyColor);
+            if (kind == RecognitionEvidenceKind.Author) return Make("[●]", "author", "", AuthorColor);
+            if (kind == RecognitionEvidenceKind.Direct) return Make("[✓]", "direct", "", DirectColor);
+            if (kind == RecognitionEvidenceKind.Normalized) return Make("[≈]", "normalized", "", NormalizeColor);
+            return null;
+        }
+
         public static List<RecognitionLegendItem> GetLegendItems()
         {
             return new List<RecognitionLegendItem>
@@ -138,6 +171,7 @@ namespace MangaAuthorSorter
                 Legend("[ID]", "entity", "实体匹配", EntityColor),
                 Legend("[◆]", "society", "社团匹配", SocietyColor),
                 Legend("[●]", "author", "作者匹配", AuthorColor),
+                Legend("[S]", "scoring", "评分识别", ScoringColor),
                 Legend("[+]", "new", "新作者", NewAuthorColor),
                 Legend("[+]", "new-reuse", "新作者复用", NewReuseColor),
                 Legend("[!]", "ambiguous", "歧义", AmbiguousColor),

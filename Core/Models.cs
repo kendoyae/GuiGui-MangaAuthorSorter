@@ -3,8 +3,43 @@ using System.Collections.Generic;
 
 namespace MangaAuthorSorter
 {
+    internal enum PlanStatusCode
+    {
+        None,
+        Unrecognized,
+        Ambiguous,
+        CandidateConfirmation,
+        Matched,
+        NewAuthor,
+        NewAuthorReuse,
+        AlreadyInTarget,
+        TargetExists,
+        ManualFolder,
+        ManualAuthor,
+        Excluded,
+        BatchTargetConflict
+    }
+
+    internal enum RecognitionEvidenceKind
+    {
+        None,
+        Direct,
+        Normalized,
+        Alias,
+        Entity,
+        Society,
+        Author,
+        Scoring,
+        NewAuthor,
+        NewAuthorReuse,
+        Ambiguous,
+        Manual,
+        Unrecognized
+    }
+
     internal sealed class PlanItem
     {
+        public long FileId;
         public string FileName = "";
         public string SourcePath = "";
         public string Author = "";
@@ -22,6 +57,11 @@ namespace MangaAuthorSorter
         public List<bool> CandidateIsPlanned = new List<bool>();
         public DateTime LastWriteTime;
         public long FileSize = -1;
+        public int RecognitionScore;
+        public int RecognitionRunnerUpScore;
+        public PlanStatusCode StatusCode;
+        public RecognitionEvidenceKind EvidenceKind;
+        public string StatusArgument = "";
 
         // Populated after the archive plan is built. A batch conflict means
         // multiple source files resolve to the same final target path.
@@ -30,6 +70,7 @@ namespace MangaAuthorSorter
         public List<string> ConflictSourcePaths = new List<string>();
         public bool CanMoveBeforePlanConflict;
         public string StatusBeforePlanConflict = "";
+        public PlanStatusCode StatusCodeBeforePlanConflict;
 
         // V1.11.6 display-only row for a global scan exclusion.
         // These items are never stored in the executable archive plan.
@@ -41,6 +82,7 @@ namespace MangaAuthorSorter
 
     internal sealed class AliasGroup
     {
+        public string EntityGroupId = "";
         public string Canonical = "";
         public List<string> Names = new List<string>();
         public HashSet<string> Norms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -67,6 +109,12 @@ namespace MangaAuthorSorter
 
     internal enum AuthorMatchType { Matched, NotFound, Ambiguous, Choice }
 
+    internal enum AuthorRecognitionMode
+    {
+        Classic,
+        Scoring
+    }
+
     internal sealed class AuthorMatchResult
     {
         public AuthorMatchType Type;
@@ -75,6 +123,9 @@ namespace MangaAuthorSorter
         public List<AuthorFolder> Candidates = new List<AuthorFolder>();
         public string Society = "";
         public string Creator = "";
+        public int Score;
+        public int RunnerUpScore;
+        public RecognitionEvidenceKind EvidenceKind;
     }
 
     internal sealed class CompositeParts
@@ -100,10 +151,19 @@ namespace MangaAuthorSorter
 
     internal sealed class SearchResult
     {
+        public ScanSessionSnapshot ScanSession;
+        // Files is the current scan/query projection. IndexFiles/IndexEntries are
+        // the canonical recursive source index before block/exclusion projection.
+        // IndexEntries carries provider-owned metadata (Everything size/times) so
+        // persistence can diff without touching the physical file again.
         public List<System.IO.FileInfo> Files = new List<System.IO.FileInfo>();
+        public List<System.IO.FileInfo> IndexFiles = new List<System.IO.FileInfo>();
+        public List<SourceIndexFileSnapshot> IndexEntries = new List<SourceIndexFileSnapshot>();
         public List<ScanExcludedItem> ExcludedItems = new List<ScanExcludedItem>();
         public int DiscoveredCount;
         public string Backend = "FileSystem";
+        // Timings belong to this query, not a mutable global provider instance.
+        public long ProviderQueryMs, IndexReconcileMs;
         public string Detail = "";
     }
     internal enum ScanProgressStage

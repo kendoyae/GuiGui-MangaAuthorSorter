@@ -10,15 +10,24 @@ namespace MangaAuthorSorter
     {
         private readonly LanguageManager _language;
         private readonly CheckBox _enabled;
-        private readonly ComboBox _provider;
         private readonly CheckBox _saveCache;
         private readonly NumericUpDown _maxLookups;
+        private readonly CheckBox _useLocalReference;
+        private readonly CheckBox _useEhentai;
+        private readonly CheckBox _useNhentai;
+        private readonly TextBox _nhentaiApiKey;
         private readonly string _entityPath;
+        private readonly Action _openEntityLibrary;
+        private readonly Action _openReferenceLibrary;
 
         public bool LookupEnabled { get; private set; }
         public string ProviderId { get; private set; }
         public bool SaveCache { get; private set; }
         public int MaxLookupsPerScan { get; private set; }
+        public bool UseLocalReference { get; private set; }
+        public bool UseEhentai { get; private set; }
+        public bool UseNhentai { get; private set; }
+        public string NhentaiApiKey { get; private set; }
 
         public OnlineAuthorSettingsForm(
             LanguageManager language,
@@ -27,18 +36,30 @@ namespace MangaAuthorSorter
             string providerId,
             bool saveCache,
             int maxLookups,
-            string entityPath)
+            bool useLocalReference,
+            bool useEhentai,
+            bool useNhentai,
+            string nhentaiApiKey,
+            string entityPath,
+            Action openEntityLibrary,
+            Action openReferenceLibrary)
         {
             _language = language;
             _entityPath = entityPath ?? "";
+            _openEntityLibrary = openEntityLibrary;
+            _openReferenceLibrary = openReferenceLibrary;
             LookupEnabled = enabled;
-            ProviderId = String.IsNullOrWhiteSpace(providerId) ? "Danbooru" : providerId;
+            ProviderId = "EvidenceChain";
             SaveCache = saveCache;
             MaxLookupsPerScan = Math.Max(1, Math.Min(100, maxLookups));
+            UseLocalReference = useLocalReference;
+            UseEhentai = useEhentai;
+            UseNhentai = useNhentai;
+            NhentaiApiKey = nhentaiApiKey ?? "";
 
             Text = L("Dialog.OnlineAuthor.Title");
-            ClientSize = new Size(720, 500);
-            MinimumSize = new Size(700, 480);
+            ClientSize = new Size(780, 650);
+            MinimumSize = new Size(740, 610);
             MaximizeBox = false;
             UiStyle.ApplyDialog(this, appFont);
 
@@ -46,9 +67,10 @@ namespace MangaAuthorSorter
             root.Dock = DockStyle.Fill;
             root.Padding = new Padding(20, 16, 20, 14);
             root.ColumnCount = 1;
-            root.RowCount = 5;
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82F));
+            root.RowCount = 6;
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 1F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));
@@ -77,11 +99,11 @@ namespace MangaAuthorSorter
             TableLayoutPanel table = new TableLayoutPanel();
             table.Dock = DockStyle.Fill;
             table.ColumnCount = 2;
-            table.RowCount = 5;
+            table.RowCount = 4;
             table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            for (int i = 0; i < 4; i++) table.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
-            table.RowStyles.Add(new RowStyle(SizeType.Absolute, 82F));
+            for (int i = 0; i < 3; i++) table.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+            table.RowStyles.Add(new RowStyle(SizeType.Absolute, 92F));
             root.Controls.Add(table, 0, 1);
 
             _enabled = new CheckBox();
@@ -93,20 +115,12 @@ namespace MangaAuthorSorter
             table.Controls.Add(_enabled, 1, 0);
             table.Controls.Add(UiStyle.NewCaption(""), 0, 0);
 
-            _provider = new ComboBox();
-            _provider.DropDownStyle = ComboBoxStyle.DropDownList;
-            _provider.Items.Add("Danbooru");
-            _provider.SelectedIndex = 0;
-            _provider.Width = 220;
-            _provider.Anchor = AnchorStyles.Left;
-            AddRow(table, 1, L("Dialog.OnlineAuthor.Provider"), _provider);
-
             _saveCache = new CheckBox();
             _saveCache.Text = L("Dialog.OnlineAuthor.SaveCache");
             _saveCache.AutoSize = true;
             _saveCache.Checked = saveCache;
             _saveCache.Anchor = AnchorStyles.Left;
-            AddRow(table, 2, L("Dialog.OnlineAuthor.LocalLibrary"), _saveCache);
+            AddRow(table, 1, L("Dialog.OnlineAuthor.LocalLibrary"), _saveCache);
 
             _maxLookups = new NumericUpDown();
             _maxLookups.Minimum = 1;
@@ -114,7 +128,7 @@ namespace MangaAuthorSorter
             _maxLookups.Value = MaxLookupsPerScan;
             _maxLookups.Width = 100;
             _maxLookups.Anchor = AnchorStyles.Left;
-            AddRow(table, 3, L("Dialog.OnlineAuthor.MaxLookups"), _maxLookups);
+            AddRow(table, 2, L("Dialog.OnlineAuthor.MaxLookups"), _maxLookups);
 
             Label policy = new Label();
             policy.Text = L("Dialog.OnlineAuthor.Policy");
@@ -127,12 +141,39 @@ namespace MangaAuthorSorter
                 int available = Math.Max(180, table.ClientSize.Width - 190);
                 policy.MaximumSize = new Size(available, 0);
             };
-            AddRow(table, 4, L("Dialog.OnlineAuthor.AutoRule"), policy);
+            AddRow(table, 3, L("Dialog.OnlineAuthor.AutoRule"), policy);
+
+            GroupBox chainBox = new GroupBox();
+            chainBox.Text = L("Dialog.OnlineAuthor.SourcesTitle");
+            chainBox.Dock = DockStyle.Fill;
+            chainBox.Padding = new Padding(12, 12, 12, 10);
+            FlowLayoutPanel chain = new FlowLayoutPanel();
+            chain.Dock = DockStyle.Fill;
+            chain.FlowDirection = FlowDirection.TopDown;
+            chain.WrapContents = false;
+            chain.AutoScroll = true;
+            _useLocalReference = NewSourceCheckBox(L("Dialog.OnlineAuthor.SourceLocal"), useLocalReference);
+            _useEhentai = NewSourceCheckBox(L("Dialog.OnlineAuthor.SourceEhentai"), useEhentai);
+            _useNhentai = NewSourceCheckBox(L("Dialog.OnlineAuthor.SourceNhentai"), useNhentai);
+            _useNhentai.CheckedChanged += delegate { UpdateEnabledState(); };
+            chain.Controls.Add(_useLocalReference);
+            chain.Controls.Add(_useEhentai);
+            FlowLayoutPanel nhRow = new FlowLayoutPanel();
+            nhRow.AutoSize = true;
+            nhRow.WrapContents = false;
+            nhRow.Controls.Add(_useNhentai);
+            Label keyLabel = new Label(); keyLabel.Text = L("Dialog.OnlineAuthor.NhApiKey"); keyLabel.AutoSize = true; keyLabel.Margin = new Padding(18, 8, 5, 0);
+            nhRow.Controls.Add(keyLabel);
+            _nhentaiApiKey = new TextBox(); _nhentaiApiKey.Width = 255; _nhentaiApiKey.UseSystemPasswordChar = true; _nhentaiApiKey.Text = nhentaiApiKey ?? ""; _nhentaiApiKey.Margin = new Padding(0, 4, 0, 0);
+            nhRow.Controls.Add(_nhentaiApiKey);
+            chain.Controls.Add(nhRow);
+            chainBox.Controls.Add(chain);
+            root.Controls.Add(chainBox, 0, 2);
 
             Panel divider = new Panel();
             divider.Dock = DockStyle.Fill;
             divider.BackColor = UiStyle.Border;
-            root.Controls.Add(divider, 0, 2);
+            root.Controls.Add(divider, 0, 3);
 
             FlowLayoutPanel tools = new FlowLayoutPanel();
             tools.Dock = DockStyle.Fill;
@@ -142,13 +183,16 @@ namespace MangaAuthorSorter
             Button openLibrary = UiStyle.NewButton(L("Dialog.OnlineAuthor.OpenLibrary"), 190, false);
             openLibrary.Click += delegate { OpenEntityLibrary(); };
             tools.Controls.Add(openLibrary);
+            Button referenceLibrary = UiStyle.NewButton(L("AuthorReference.Manage"), 190, false);
+            referenceLibrary.Click += delegate { if (_openReferenceLibrary != null) _openReferenceLibrary(); };
+            tools.Controls.Add(referenceLibrary);
             Label file = new Label();
             file.Text = System.IO.Path.GetFileName(_entityPath);
             file.ForeColor = UiStyle.Muted;
             file.AutoSize = true;
             file.Margin = new Padding(10, 8, 0, 0);
             tools.Controls.Add(file);
-            root.Controls.Add(tools, 0, 3);
+            root.Controls.Add(tools, 0, 4);
 
             FlowLayoutPanel buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Fill;
@@ -161,7 +205,7 @@ namespace MangaAuthorSorter
             save.Click += delegate { SaveValues(); };
             buttons.Controls.Add(cancel);
             buttons.Controls.Add(save);
-            root.Controls.Add(buttons, 0, 4);
+            root.Controls.Add(buttons, 0, 5);
             UpdateEnabledState();
             AcceptButton = save;
             CancelButton = cancel;
@@ -169,6 +213,11 @@ namespace MangaAuthorSorter
         }
 
         private string L(string key) { return _language.Get(key); }
+
+        private static CheckBox NewSourceCheckBox(string text, bool value)
+        {
+            CheckBox box = new CheckBox(); box.Text = text; box.Checked = value; box.AutoSize = true; box.Margin = new Padding(4, 5, 4, 2); return box;
+        }
 
         private static void AddRow(TableLayoutPanel table, int row, string caption, Control control)
         {
@@ -182,40 +231,31 @@ namespace MangaAuthorSorter
         private void UpdateEnabledState()
         {
             bool enabled = _enabled != null && _enabled.Checked;
-            if (_provider != null) _provider.Enabled = enabled;
             if (_saveCache != null) _saveCache.Enabled = enabled;
             if (_maxLookups != null) _maxLookups.Enabled = enabled;
+            if (_useLocalReference != null) _useLocalReference.Enabled = enabled;
+            if (_useEhentai != null) _useEhentai.Enabled = enabled;
+            if (_useNhentai != null) _useNhentai.Enabled = enabled;
+            if (_nhentaiApiKey != null) _nhentaiApiKey.Enabled = enabled && _useNhentai.Checked;
         }
 
         private void SaveValues()
         {
             LookupEnabled = _enabled.Checked;
-            ProviderId = "Danbooru";
+            ProviderId = "EvidenceChain";
             SaveCache = _saveCache.Checked;
             MaxLookupsPerScan = Decimal.ToInt32(_maxLookups.Value);
+            UseLocalReference = _useLocalReference.Checked;
+            UseEhentai = _useEhentai.Checked;
+            UseNhentai = _useNhentai.Checked;
+            NhentaiApiKey = _nhentaiApiKey.Text.Trim();
             DialogResult = DialogResult.OK;
             Close();
         }
 
         private void OpenEntityLibrary()
         {
-            try
-            {
-                string dir = System.IO.Path.GetDirectoryName(_entityPath);
-                if (!String.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-                if (!File.Exists(_entityPath))
-                {
-                    string emptyLibrary =
-                        "{\"Version\":1,\"Authors\":[],\"Aliases\":[]," +
-                        "\"Circles\":[],\"AuthorCircles\":[],\"LookupCache\":[]}";
-                    File.WriteAllText(_entityPath, emptyLibrary, new System.Text.UTF8Encoding(false));
-                }
-                Process.Start("explorer.exe", "/select,\"" + _entityPath + "\"");
-            }
-            catch (Exception ex)
-            {
-                UiMessageBox.Show(this, ex.Message, L("Common.Error.OpenFailed"), MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            if (_openEntityLibrary != null) _openEntityLibrary();
         }
     }
 }

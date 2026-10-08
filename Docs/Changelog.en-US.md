@@ -1,3 +1,59 @@
+## V1.12.10 — Unified author entities and safe public overrides
+
+- Remove the separate alias library. AuthorEntities.json now manages author/group/alias CRUD, relationships, conflicts, public overrides, import/export and lookup status.
+- Keep the public database read-only. Unique stable identities carry overrides across versions; missing/split identities retain edits and require explicit rebinding instead of guessing from row IDs.
+- Invalidate recognition and durable plans by file identity dependencies while preserving the source index. Session-only online entities refresh recognition and can be promoted safely.
+- Real 8,490-file migration comparison has zero identity/target changes; repeated planning hits all 8,490 cached rows with zero recalculation. Six historical identity conflicts now require confirmation; resulting allocation changes are documented.
+- See Docs/UNIFIED_AUTHOR_LIBRARY.md and Docs/AuthorLibraryAcceptance for operations, recovery and measured acceptance. Version: 1.12.10.0.
+
+## V1.12.8 — Fast zero-result scans and incremental plan persistence
+
+- Verify Everything's indexed-directory coverage for a successful empty query, avoiding unnecessary filesystem rescans while retaining fallback for uncertain coverage.
+- Skip plan-cache writes on a full cache hit; write only newly recalculated rows and reuse a prepared SQLite statement.
+- Prevent stale provider timings and deltas from warmup snapshots from contaminating current-run diagnostics; record plan cache read/write and finalization time.
+
+## V1.12.6 · Performance history display fix
+
+- Fixed newer background warmup status overriding selected historical scan metrics after restarting GuiGui.
+- Copy now uses the selected historical performance report, even when a newer warmup fails.
+- Clearing performance history also clears the on-disk log; failures preserve the current list and are reported.
+- Added a regression contract for persistence and history selection without changing scan or recognition behavior.
+
+## V1.12.6
+
+- Replaced repeated full target-author index rebuilds with incremental registrations during planning.
+- Added real-scan phase diagnostics and index-update counters (GL4 format, reads GL3).
+- Added regression coverage for incremental vs rebuilt matching semantics. Language schema 75.
+
+## V1.12.5
+
+- Ordinary `GuiGuiAuthorIndex.db` author resolution now builds one read-only in-memory identity index instead of issuing several SQLite queries for every new author; GuiGui warms this index in the background.
+- The simulation benchmark now supports a unique-author count plus cold/warm author-index modes for realistic author repetition, cold-start, and steady-state tests.
+- Reports now show author-index build time and index size so database preparation can be separated from recognition time.
+- Fixed raw language keys appearing in parts of performance diagnostics and simulation progress; the official language schema is now version 74.
+
+## V1.12.4
+
+- Added live simulation stages, progress, current-item, and elapsed-time feedback.
+- The simulation benchmark is now an independent modeless window and no longer blocks the main UI or performance diagnostics.
+
+## V1.12.3
+
+- Fixed the simulation window failing to open on some DPI/layout configurations because of an early SplitContainer distance assignment.
+
+## V1.12.2
+
+- Added a fully in-memory simulation benchmark that reads `GuiGuiAuthorIndex.db` only for test data and measures first, cached, and incremental scans without modifying real files or production caches.
+
+## V1.12.1
+
+- Reworked the source index around a persistent FileIndex, incremental deltas, Recognition Cache, and Query/View projections.
+- Toggling recursive scanning is now an index projection and no longer rediscoveries or re-recognizes cached files.
+- Unchanged files are excluded before parsing and recognition; pure moves preserve recognition facts while true renames invalidate only that file.
+- Everything metadata is consumed directly for size and timestamps, avoiding a physical metadata read for every result.
+- GuiGui-owned moves and renames now update the durable index, active scan session, and in-memory snapshot immediately.
+- Scan diagnostics now report index hits and Added/Modified/Moved/Renamed/Deleted deltas, plan-cache hits, and recalculated files.
+
 ## V1.12.0
 
 - Added Chinese, English, and German user guides and release notes that follow the interface language.
