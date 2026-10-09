@@ -7,6 +7,7 @@ namespace MangaAuthorSorter
     internal sealed class ArchiveSettingsForm : Form
     {
         private readonly LanguageManager _language;
+        private readonly AuthorEntityStore _authorStore;
         private readonly NumericUpDown _maxAuthors;
         private readonly NumericUpDown _safetyReserveGb;
         private readonly TextBox _prefix;
@@ -28,9 +29,10 @@ namespace MangaAuthorSorter
         public string GroupTemplate { get; private set; }
         public string AuthorFolderTemplate { get; private set; }
 
-        public ArchiveSettingsForm(LanguageManager language, Font appFont, int maxAuthors, string groupTemplate, string authorFolderTemplate, decimal safetyReserveGb)
+        public ArchiveSettingsForm(LanguageManager language, Font appFont, int maxAuthors, string groupTemplate, string authorFolderTemplate, decimal safetyReserveGb, AuthorEntityStore authorStore)
         {
             _language = language;
+            _authorStore = authorStore;
             MaxAuthors = maxAuthors;
             SafetyReserveGb = safetyReserveGb;
             GroupTemplate = groupTemplate;
@@ -282,6 +284,12 @@ namespace MangaAuthorSorter
             Button save = UiStyle.NewButton(L("Common.Save"), 88, true);
             buttons.Controls.Add(cancel);
             buttons.Controls.Add(save);
+            Button folderRules = UiStyle.NewButton(L("EntityManager.RulesTab"), 160, false);
+            folderRules.AutoSize = true;
+            folderRules.Click += delegate {
+                using (FolderNameRulesForm rules = new FolderNameRulesForm(_authorStore, _language, Font)) rules.ShowDialog(this);
+            };
+            buttons.Controls.Add(folderRules);
             root.Controls.Add(buttons, 0, 6);
             AcceptButton = save;
             CancelButton = cancel;

@@ -13,10 +13,10 @@ namespace MangaAuthorSorter
     /// </summary>
     internal sealed class ParsedMetadataCacheService : IParsedMetadataCache, ICacheLayerDiagnostics
     {
-        private const string ParserVersion = "2";
+        private const string ParserVersion = FileNameStructure.RuleVersion;
         private const char Separator = '\u001f';
         private readonly FileIndexCacheDatabase _database;
-        private readonly string _tagCleaningVersion;
+        private string _tagCleaningVersion;
         private readonly ConcurrentDictionary<string, ParsedMetadataCacheEntry> _entries;
         private readonly ConcurrentDictionary<string, ParsedMetadataCacheEntry> _pending =
             new ConcurrentDictionary<string, ParsedMetadataCacheEntry>(StringComparer.OrdinalIgnoreCase);
@@ -34,6 +34,12 @@ namespace MangaAuthorSorter
             try { loaded = database.LoadParsedMetadata(); }
             catch { loaded = new Dictionary<string, ParsedMetadataCacheEntry>(StringComparer.OrdinalIgnoreCase); }
             _entries = new ConcurrentDictionary<string, ParsedMetadataCacheEntry>(loaded, StringComparer.OrdinalIgnoreCase);
+        }
+
+        public void UpdateTagCleaningVersion(string version)
+        {
+            // Keep old rows; their dependency fingerprint makes them miss lazily.
+            _tagCleaningVersion = version ?? "";
         }
 
         public bool TryGetAuthorCandidates(string fullPath, string fileName, out List<string> candidates)

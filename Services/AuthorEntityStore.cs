@@ -42,6 +42,7 @@ namespace MangaAuthorSorter
         public string RomanName = "";
         public string EHArtistTag = "";
         public string NHArtistTag = "";
+        public string DanbooruArtistTag = "";
         public string Source = "";
         public string ExternalId = "";
         public string EntityType = "Artist";
@@ -183,6 +184,12 @@ namespace MangaAuthorSorter
                     List<PublicEntitySnapshot> bound = AuthorEntityStore.BindOverride(record, snapshots.Values);
                     if (bound.Count == 1) {
                         _publicEntityDependencies[bound[0].Id] = fingerprint;
+                        foreach (string name in bound[0].Aliases.Concat(bound[0].LookupNames.SelectMany(x => new[] { x.Value, x.NormalizedName })).Concat(new[] { bound[0].CanonicalName, bound[0].RomanName })) {
+                            foreach (string norm in GetLookupNorms(name)) {
+                                string previous; _publicNameDependencies.TryGetValue(norm, out previous);
+                                _publicNameDependencies[norm] = previous + "|" + fingerprint;
+                            }
+                        }
                         if (record.Status == "Active") _activePublicOverrides.Add(bound[0].Id);
                     }
                 }
@@ -221,6 +228,8 @@ namespace MangaAuthorSorter
                 AddName(author.Id, PrettyTag(author.EHArtistTag));
                 AddName(author.Id, author.NHArtistTag);
                 AddName(author.Id, PrettyTag(author.NHArtistTag));
+                AddName(author.Id, author.DanbooruArtistTag);
+                AddName(author.Id, PrettyTag(author.DanbooruArtistTag));
             }
 
             foreach (AuthorAliasRecord alias in db.Aliases ?? new List<AuthorAliasRecord>())
@@ -262,7 +271,7 @@ namespace MangaAuthorSorter
             Dictionary<int, string> entityVersions = new Dictionary<int, string>();
             foreach (var pair in _authorsById)
                 entityVersions[pair.Key] = AuthorEntityStore.ContentHash(Encoding.UTF8.GetBytes(serializer.Serialize(new {
-                    pair.Value.CanonicalName, pair.Value.RomanName, pair.Value.EHArtistTag, pair.Value.NHArtistTag,
+                    pair.Value.CanonicalName, pair.Value.RomanName, pair.Value.EHArtistTag, pair.Value.NHArtistTag, pair.Value.DanbooruArtistTag,
                     pair.Value.UserConfirmed, pair.Value.EntityType,
                     Aliases = aliasesByAuthor[pair.Key].OrderBy(x => x.Alias).ToList(),
                     Relations = relationsByAuthor[pair.Key].ToList(),
@@ -302,16 +311,8 @@ namespace MangaAuthorSorter
                     string value; if (_dependencies.TryGetValue(norm, out value)) evidence.Append('|').Append(norm).Append('=').Append(value);
                     if (_publicNameDependencies.TryGetValue(norm, out value)) evidence.Append("|public-name:").Append(norm).Append('=').Append(value);
                 }
-                // Public overrides use the filtered immutable public view. Include
-                // their revision only when a candidate actually relies on public data.
-                if (_publicOverrideIndex != null)
-                    foreach (string candidate in candidates) {
-                        AuthorEntityMatch match = ResolvePublic(candidate);
-                        string value;
-                        if (match.Entity != null && _publicEntityDependencies.TryGetValue(match.Entity.Id, out value)) {
-                            evidence.Append("|public=").Append(value);
-                        }
-                    }
+                // Every affected public lookup key is projected when the immutable
+                // index is built. Dependency checks must never issue public SQL.
                 return AuthorEntityStore.ContentHash(Encoding.UTF8.GetBytes(evidence.ToString()));
             });
         }
@@ -589,6 +590,7 @@ namespace MangaAuthorSorter
         private readonly AuthorEntityDatabase _sessionOverlay = new AuthorEntityDatabase();
         private int _nextSessionAuthorId = -1;
         private long _identityRevision;
+        private string _recognitionContentHash, _recognitionAliasVersion, _recognitionEntityVersion;
         public long IdentityRevision { get { return System.Threading.Interlocked.Read(ref _identityRevision); } }
 
         public event Action Changed;
@@ -612,12 +614,37 @@ namespace MangaAuthorSorter
 
         public string GetRecognitionVersion(bool aliasesOnly)
         {
-            AuthorEntityDatabase db = Load();
+            lock (_sync)
+            {
+                // Check content, not only timestamps: external edits of equal
+                // size with a preserved timestamp must still invalidate rules.
+                bool exists = File.Exists(_path);
+                byte[] bytes = exists ? File.ReadAllBytes(_path) : new byte[0];
+                string contentHash;
+                using (System.Security.Cryptography.SHA256 hash = System.Security.Cryptography.SHA256.Create())
+                    contentHash = exists ? Convert.ToBase64String(hash.ComputeHash(bytes)) : "Missing";
+                if (_recognitionContentHash != contentHash)
+                {
+                    AuthorEntityDatabase db;
+                    using (StreamReader reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, true))
+                        db = exists ? ParseDatabase(reader.ReadToEnd(), _path) : new AuthorEntityDatabase();
+                    string aliasVersion = ComputeRecognitionVersion(db, true);
+                    string entityVersion = ComputeRecognitionVersion(db, false);
+                    _recognitionAliasVersion = aliasVersion;
+                    _recognitionEntityVersion = entityVersion;
+                    _recognitionContentHash = contentHash;
+                }
+                return aliasesOnly ? _recognitionAliasVersion : _recognitionEntityVersion;
+            }
+        }
+
+        private static string ComputeRecognitionVersion(AuthorEntityDatabase db, bool aliasesOnly)
+        {
             JavaScriptSerializer serializer = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
             object view = aliasesOnly ? (object)db.LegacyAliasGroups.Select(x => new { x.Id, x.Canonical, x.Names, x.Status }).ToList()
                 : (object)new {
                     Authors = db.Authors.Select(x => new { x.Id, x.EntityType, x.CanonicalName, x.RomanName,
-                        x.EHArtistTag, x.NHArtistTag, x.EHTag, x.EHNamespace, x.UserConfirmed, x.Source }).ToList(),
+                        x.EHArtistTag, x.NHArtistTag, x.DanbooruArtistTag, x.EHTag, x.EHNamespace, x.UserConfirmed, x.Source }).ToList(),
                     Aliases = db.Aliases,
                     Circles = db.Circles.Select(x => new { x.Id, x.CanonicalName, x.RomanName, x.EHGroupTag, x.NHGroupTag }).ToList(),
                     Relations = db.AuthorCircles, CircleAliases = db.CircleAliases,
@@ -799,6 +826,14 @@ namespace MangaAuthorSorter
                 if (File.Exists(_path)) return;
                 SaveInternal(new AuthorEntityDatabase());
             }
+        }
+
+        public List<string> GetWorkTitleCandidates(string title)
+        {
+            AuthorLookupCacheRecord cached = GetFreshLookup("WorkTitle-v1", title, 14);
+            if (cached == null || cached.Status != "candidate") return new List<string>();
+            try { return new JavaScriptSerializer().Deserialize<List<string>>(cached.Detail) ?? new List<string>(); }
+            catch { return new List<string>(); }
         }
 
         public AuthorLookupCacheRecord GetFreshLookup(string provider, string query, int staleDays)
@@ -1044,8 +1079,13 @@ namespace MangaAuthorSorter
 
         private static AuthorEntityDatabase ReadDatabase(string path)
         {
+            return ParseDatabase(File.ReadAllText(path, Encoding.UTF8), path);
+        }
+
+        private static AuthorEntityDatabase ParseDatabase(string text, string path)
+        {
             JavaScriptSerializer serializer = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
-            AuthorEntityDatabase db = serializer.Deserialize<AuthorEntityDatabase>(File.ReadAllText(path, Encoding.UTF8));
+            AuthorEntityDatabase db = serializer.Deserialize<AuthorEntityDatabase>(text);
             if (db == null) throw new InvalidDataException("Author entity database is null: " + path);
             if (db.SchemaVersion > 3) throw new InvalidDataException("Unsupported author entity schema: " + db.SchemaVersion);
             db = NormalizeDatabase(db);

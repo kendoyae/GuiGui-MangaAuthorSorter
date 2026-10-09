@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace MangaAuthorSorter
@@ -164,6 +164,10 @@ namespace MangaAuthorSorter
         public string Backend = "FileSystem";
         // Timings belong to this query, not a mutable global provider instance.
         public long ProviderQueryMs, IndexReconcileMs;
+        public long DiscoverySetMs = -1, DiscoveryEnumerateMs = -1, DiscoveryCompareMs = -1;
+        public long SdkPrepareMs = -1, EverythingWaitMs = -1, EverythingReadMs = -1, DiscoveryCheckMs = -1;
+        public int EverythingQueryCount;
+        public bool SourceSnapshotHit;
         public string Detail = "";
     }
     internal enum ScanProgressStage

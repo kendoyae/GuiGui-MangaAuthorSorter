@@ -29,7 +29,7 @@ namespace MangaAuthorSorter
 
     internal sealed class FileIndexVersions
     {
-        public int SchemaVersion = 8;
+        public int SchemaVersion = 9;
         public string ParserVersion = "2";
         public string AliasVersion = "";
         public string EntityVersion = "";

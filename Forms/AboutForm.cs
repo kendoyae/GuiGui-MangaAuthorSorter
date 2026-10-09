@@ -232,23 +232,14 @@ namespace MangaAuthorSorter
             table.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
             table.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
 
-            Label title = NewSectionTitle(titleText);
+            Label title = UiStyle.NewSectionTitle(titleText);
             title.Dock = DockStyle.Fill;
             table.Controls.Add(title, 0, 0);
             table.SetColumnSpan(title, 2);
             return table;
         }
 
-        private static Label NewSectionTitle(string text)
-        {
-            Label label = new Label();
-            label.Text = text ?? "";
-            label.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 9.5F, FontStyle.Bold);
-            label.ForeColor = UiStyle.Text;
-            label.AutoSize = false;
-            label.TextAlign = ContentAlignment.MiddleLeft;
-            return label;
-        }
+
 
         private static Label NewMutedLabel(string text)
         {

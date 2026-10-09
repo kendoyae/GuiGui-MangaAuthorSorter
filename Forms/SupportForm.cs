@@ -62,7 +62,7 @@ namespace MangaAuthorSorter
             root.Controls.Add(header, 0, 0);
             root.Controls.Add(UiStyle.NewDivider(), 0, 1);
 
-            Label methodsTitle = NewSectionTitle(language.Get("Support.Methods"));
+            Label methodsTitle = UiStyle.NewSectionTitle(language.Get("Support.Methods"));
             methodsTitle.Dock = DockStyle.Fill;
             methodsTitle.TextAlign = ContentAlignment.BottomLeft;
             methodsTitle.Padding = new Padding(0, 0, 0, 6);
@@ -80,7 +80,7 @@ namespace MangaAuthorSorter
             qrRow.Controls.Add(CreateQrCard(language.Get("Support.Alipay"), EmbeddedResourceService.SupportAlipay, true, out _alipayPicture), 1, 0);
             root.Controls.Add(qrRow, 0, 3);
 
-            Label onlineTitle = NewSectionTitle(language.Get("Support.OnlineSupport"));
+            Label onlineTitle = UiStyle.NewSectionTitle(language.Get("Support.OnlineSupport"));
             onlineTitle.Dock = DockStyle.Fill;
             onlineTitle.TextAlign = ContentAlignment.BottomLeft;
             onlineTitle.Padding = new Padding(0, 0, 0, 6);
@@ -228,16 +228,7 @@ namespace MangaAuthorSorter
             picture.Image = null;
         }
 
-        private static Label NewSectionTitle(string text)
-        {
-            Label label = new Label();
-            label.Text = text ?? "";
-            label.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 9.5F, FontStyle.Bold);
-            label.ForeColor = UiStyle.Text;
-            label.AutoSize = false;
-            label.TextAlign = ContentAlignment.MiddleLeft;
-            return label;
-        }
+
 
         private static Label NewMutedLabel(string text)
         {

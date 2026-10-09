@@ -28,6 +28,7 @@ namespace MangaAuthorSorter
             public string Normalized = "";
             public List<string> Regions = new List<string>();
             public List<string> MetadataTags = new List<string>();
+            public List<string> Creators = new List<string>();
         }
 
         private sealed class Ranked
@@ -337,6 +338,11 @@ namespace MangaAuthorSorter
                     score += 20;
                     evidence.Add("与作者文件夹身份一致 +20");
                 }
+                if (file.Creators.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    score += 30;
+                    evidence.Add("[社团 (作者)] 内部作者字段 +30");
+                }
                 if (IsAtFileFront(file.Normalized, index))
                 {
                     score += 15;
@@ -426,9 +432,14 @@ namespace MangaAuthorSorter
         private static PreparedFile PrepareFile(string fileName, TagCleaningRuleStore cleaningStore)
         {
             PreparedFile result = new PreparedFile();
-            result.Raw = fileName ?? "";
+            result.Raw = FileNameStructure.Parse(fileName).IdentityText;
             result.Normalized = NormalizeForSearch(result.Raw);
             result.Regions = ExtractRegions(result.Raw);
+            foreach (string candidate in AuthorRules.GetAuthorCandidatesFromFileName(result.Raw, cleaningStore))
+            {
+                StructuredAuthorParts parts = AuthorRules.GetStructuredAuthorParts(candidate);
+                if (parts != null) result.Creators.AddRange(parts.Creators.Select(AuthorRules.NormalizeText));
+            }
             if (cleaningStore != null)
             {
                 foreach (Match match in Regex.Matches(result.Raw, @"[\[［【]\s*([^\]］】]{1,100})\s*[\]］】]"))

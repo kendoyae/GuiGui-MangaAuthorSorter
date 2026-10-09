@@ -1,5 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 namespace MangaAuthorSorter
 {
@@ -33,6 +35,21 @@ namespace MangaAuthorSorter
     internal interface IFileSystemSnapshotVersionProvider
     {
         long SnapshotRevision { get; }
+    }
+
+    internal interface IFileSystemScopedSnapshotVersionProvider
+    {
+        long GetSnapshotRevision(string source, bool recursive, HashSet<string> blockedPaths, IEnumerable<string> extensions);
+    }
+
+    internal interface IFileSystemIndexRefreshProvider
+    {
+        SearchResult SearchFilesAfterChange(string source, bool recursive, int scanLimit,
+            HashSet<string> blockedPaths, IEnumerable<string> extensions,
+            Action<ScanProgressInfo> progress, Func<bool> cancelRequested);
+        SearchResult ValidateDiscoveryScope(SearchResult result, string source, bool recursive,
+            HashSet<string> blockedPaths, IEnumerable<string> extensions,
+            Action<ScanProgressInfo> progress, Func<bool> cancelRequested);
     }
 
     /// <summary>
@@ -142,7 +159,7 @@ namespace MangaAuthorSorter
     /// business logic. Auto always has a Windows fallback.
     /// </summary>
     internal sealed class FileSystemIndexProviderRouter : IFileSystemIndexProvider,
-        IFileSystemIndexConfigurationVersionProvider
+        IFileSystemIndexConfigurationVersionProvider, IFileSystemIndexRefreshProvider
     {
         private readonly IFileSystemIndexProvider _everything;
         private readonly IFileSystemIndexProvider _native;
@@ -193,6 +210,71 @@ namespace MangaAuthorSorter
                 progress, cancelRequested);
         }
 
+        public SearchResult SearchFilesAfterChange(string source, bool recursive, int scanLimit,
+            HashSet<string> blockedPaths, IEnumerable<string> extensions,
+            Action<ScanProgressInfo> progress, Func<bool> cancelRequested)
+        {
+            // A watcher already proved the live filesystem changed. Everything
+            // may not have indexed that event yet; validate this round natively.
+            return _native.SearchFiles(source, recursive, scanLimit, blockedPaths, extensions, progress, cancelRequested);
+        }
+
+        public SearchResult ValidateDiscoveryScope(SearchResult result, string source, bool recursive,
+            HashSet<string> blockedPaths, IEnumerable<string> extensions,
+            Action<ScanProgressInfo> progress, Func<bool> cancelRequested)
+        {
+            if (result == null || result.Backend != "Everything SDK") return result;
+            System.Diagnostics.Stopwatch checkTimer = System.Diagnostics.Stopwatch.StartNew();
+            bool complete = false;
+            try
+            {
+                // Names only: do not reread size/time for every indexed file.
+                // A newly created directory can exist before Everything finishes
+                // indexing it, even without any event in this process's watcher.
+                HashSet<string> remaining = new HashSet<string>(
+                    (result.IndexEntries ?? new List<SourceIndexFileSnapshot>()).Select(x => x.FullPath),
+                    StringComparer.OrdinalIgnoreCase);
+                HashSet<string> allowed = new HashSet<string>(FileTypeRules.NormalizeExtensions(extensions), StringComparer.OrdinalIgnoreCase);
+                result.DiscoverySetMs = checkTimer.ElapsedMilliseconds;
+                long enumerateTicks = 0, compareTicks = 0;
+                complete = true;
+                using (IEnumerator<string> paths = ScopeFileNames.Enumerate(source, recursive, allowed, cancelRequested).GetEnumerator())
+                {
+                    while (true)
+                    {
+                        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+                        bool hasNext = paths.MoveNext();
+                        enumerateTicks += System.Diagnostics.Stopwatch.GetTimestamp() - start;
+                        if (!hasNext) break;
+                        start = System.Diagnostics.Stopwatch.GetTimestamp();
+                        bool found = remaining.Remove(paths.Current);
+                        compareTicks += System.Diagnostics.Stopwatch.GetTimestamp() - start;
+                        if (!found) { complete = false; break; }
+                    }
+                }
+                result.DiscoveryEnumerateMs = enumerateTicks * 1000 / System.Diagnostics.Stopwatch.Frequency;
+                result.DiscoveryCompareMs = compareTicks * 1000 / System.Diagnostics.Stopwatch.Frequency;
+                complete = complete && remaining.Count == 0;
+            }
+            // An unreadable subtree is not evidence that SDK-only entries were
+            // deleted. Preserve the indexed result instead of pruning its rows.
+            catch (IOException) { return result; }
+            catch (UnauthorizedAccessException) { return result; }
+            finally { result.DiscoveryCheckMs = checkTimer.ElapsedMilliseconds; }
+            if (complete) return result;
+            int queries = result.EverythingQueryCount;
+            SearchResult validated = SearchFilesAfterChange(source, recursive, 0, blockedPaths, extensions, progress, cancelRequested);
+            validated.EverythingQueryCount += queries;
+            validated.SdkPrepareMs = result.SdkPrepareMs;
+            validated.EverythingWaitMs = result.EverythingWaitMs;
+            validated.EverythingReadMs = result.EverythingReadMs;
+            validated.DiscoveryCheckMs = result.DiscoveryCheckMs;
+            validated.DiscoverySetMs = result.DiscoverySetMs;
+            validated.DiscoveryEnumerateMs = result.DiscoveryEnumerateMs;
+            validated.DiscoveryCompareMs = result.DiscoveryCompareMs;
+            return validated;
+        }
+
         private IFileSystemIndexProvider Select()
         {
             if (Mode == FileSystemIndexProviderMode.Windows)
@@ -200,6 +282,22 @@ namespace MangaAuthorSorter
             if (Mode == FileSystemIndexProviderMode.Everything)
                 return _everything.IsAvailable ? _everything : _native;
             return _everything.IsAvailable ? _everything : _native;
+        }
+    }
+
+    // Keep Framework enumeration: the large-fetch native variant regressed on
+    // the user's physical library despite being faster on a small local fixture.
+    internal static class ScopeFileNames
+    {
+        internal static IEnumerable<string> Enumerate(string source, bool recursive,
+            HashSet<string> allowedExtensions, Func<bool> canceled)
+        {
+            foreach (string path in Directory.EnumerateFiles(source, "*",
+                recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly))
+            {
+                if (canceled != null && canceled()) throw new OperationCanceledException();
+                if (allowedExtensions.Contains(Path.GetExtension(path).TrimStart('.'))) yield return path;
+            }
         }
     }
 }

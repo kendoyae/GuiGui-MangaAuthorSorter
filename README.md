@@ -1,3 +1,25 @@
+## V1.13.10 高级数据源合并性能修复
+
+- 修复大量 E-Hentai Tag Aggregate 标签合并时的未索引关联子查询，加入分组优化。
+- 合并期间状态显示“正在合并公共库（已运行 N 秒）”，进度条不再提前显示 100%。
+- 大型合并支持暂停、继续、取消；已完成的来源过滤证据会保留，可重试合并。
+- 当前只提供 .NET Framework 4.8 源码，需在 Windows 运行 BUILD_EXE.cmd 生成 EXE；尚未在当前环境实机编译。
+
+## V1.13.9 编译修复
+修复高级来源下载 `DownloadAsync` 遗漏的暂停控制参数：该问题导致 `CS0103` 和 `CS1501`。仍使用原有 .NET Framework 4.8 编译脚本 `BUILD_EXE.cmd`，无须安装 .NET 8。本版保持 V1.13.8 的高级构建功能，等待 Windows 编译与运行验收。
+
+## V1.13.8 Windows 编译清单修复
+修复 V1.13.7 高级构建 5 个新增源文件路径格式导致的 CS1504。`BUILD_EXE.cmd` 现会先执行 `Build/ValidateSources.ps1`，检查 79 个编译文件是否存在且与项目一致。用户无需单独移动 `.cs` 文件。功能与 V1.13.7 一致；仍需 Windows 编译验收。
+
+## V1.13.7 高级构建三来源可视化管理
+归归内置 **E-Hentai Current / nh-metadata-archive / E-Hentai Tag Aggregate** 三个来源卡片。高级窗口提供逐源检查、下载、选择、过滤和移除原始库的操作。
+CSV 继续按 Git Blob SHA 增量下载；大型 SQLite 独立存放于 `AuthorDbSources`，不随归归分发。GZIP 可内置解压；ZSTD 需要将 `zstd.exe` 放入 `Modules` 目录或使用 PATH 中可信程序，或者手动选择解压后的 `.db` 文件。处理完成将生成待重启激活的公共索引。
+若现有公共库不是 Schema v4，请先备份，优先下载新版开发者索引；也可以通过「新建空库」明确从零重建（旧数据不自动迁移）。
+
+## V1.13.6 统一公共库更新
+
+普通用户可以下载开发者发布的 Schema v4 公共索引（需配置公开 manifest）；日常 CSV 按 SHA 增量合并，高级模式可从空库完整导入历史 CSV。无需 .NET 8。使用与发布方式见 `Docs/PUBLIC_INDEX_RELEASE_V1.13.6.md`。
+
 # 归归 / GuiGui 使用说明
 
 [简体中文](README.md) | [English](README_EN.md)
@@ -79,3 +101,12 @@
 V1.12.8：非递归扫描仅查询当前目录（Everything 使用 parent:）；按需补齐子目录索引。首次扫描与索引数据库同步分开计时。详见 `Docs/INDEX_SCOPE_V1.12.8.md`。
 
 作者实体库 V1.12.10：新增、编辑、删除作者与别名，管理公共覆盖、关系及冲突。旧 TXT 只供导入。[使用与验收说明](Docs/UNIFIED_AUTHOR_LIBRARY.md)。
+
+## V1.13.5 作者公共数据库增量更新
+
+- 用户下载的 `nh-metadata-archive` CSV 经统一过滤，作品证据先写入 `GuiGuiReferenceEvidence.db`，再按 `GuiGuiAuthorIndex.db.official-base` 基线生成 `GuiGuiAuthorIndex.db.pending`。
+- 下一次启动前会检查 SHA-256 和来源版本，随后原子切换数据库并保留 `.pre-merge.bak`。若官方数据库被其他操作更新，不会用旧 pending 文件覆盖它。
+- 追加的名字只能通过相同 provider tag 或唯一的跨来源精确键与既有实体关联；不因同一作品包含两个作者就将其合并。
+- 没有 `GuiGuiAuthorIndex.db` 时，不能执行公共库合并；应先部署构建器生成的公共库。
+- 首次启动/官方库升级后可能需要再次执行“重新校验”，以使新的参考证据与实体状态一致。
+- 保留原 `AuthorEntities.json`，不会因公共库更新而改写。

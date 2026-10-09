@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -12,12 +12,15 @@ namespace MangaAuthorSorter
     /// filename parsing or recognition again.
     /// </summary>
     internal sealed class PersistentSourceIndexProvider : IFileSystemIndexProvider,
-        IFileSystemSnapshotVersionProvider, IFileSystemIndexMutationSink,
+        IFileSystemSnapshotVersionProvider, IFileSystemScopedSnapshotVersionProvider, IFileSystemIndexMutationSink,
         IScanSessionProvider, IDisposable
     {
         private readonly IFileSystemIndexProvider _inner;
         private readonly FileIndexCacheDatabase _database;
+        private readonly string _databasePath;
         private readonly object _sync = new object();
+        private readonly object _discoveryGate = new object();
+        private readonly List<WatchedSnapshot> _retiredSnapshots = new List<WatchedSnapshot>();
         private FileIndexDelta _lastDelta = new FileIndexDelta();
         private readonly Dictionary<string, WatchedSnapshot> _snapshots =
             new Dictionary<string, WatchedSnapshot>(StringComparer.Ordinal);
@@ -35,6 +38,9 @@ namespace MangaAuthorSorter
             public FileSystemWatcher Watcher;
             public bool Dirty;
             public bool MonitorHealthy;
+            public bool Recursive;
+            public long Revision;
+            public HashSet<string> Extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public DateTime LastUsedUtc;
 
             public void Dispose()
@@ -55,6 +61,7 @@ namespace MangaAuthorSorter
             if (database == null) throw new ArgumentNullException("database");
             _inner = inner;
             _database = database;
+            _databasePath = NormalizePath(database.PathName);
         }
 
         public string ProviderId { get { return _inner.ProviderId; } }
@@ -62,6 +69,17 @@ namespace MangaAuthorSorter
         public long SnapshotRevision
         {
             get { return System.Threading.Interlocked.Read(ref _snapshotRevision); }
+        }
+
+        public long GetSnapshotRevision(string source, bool recursive, HashSet<string> blockedPaths, IEnumerable<string> extensions)
+        {
+            string key = BuildSnapshotKey(source, blockedPaths, extensions, _inner.ProviderId, GetProviderConfigurationVersion(_inner));
+            lock (_sync)
+            {
+                WatchedSnapshot snapshot;
+                if (_snapshots.TryGetValue(key + (recursive ? "|Depth=All" : "|Depth=Top"), out snapshot)) return snapshot.Revision;
+                return !recursive && _snapshots.TryGetValue(key + "|Depth=All", out snapshot) ? snapshot.Revision : 0;
+            }
         }
 
         public FileIndexDelta LastDelta
@@ -95,6 +113,26 @@ namespace MangaAuthorSorter
             Action<ScanProgressInfo> progress,
             Func<bool> cancelRequested)
         {
+            // Matching requests wait for one discovery, then reuse its monitored
+            // result. Cancellation is checked while waiting, including shutdown.
+            while (!System.Threading.Monitor.TryEnter(_discoveryGate, 40))
+                if (cancelRequested != null && cancelRequested()) throw new OperationCanceledException();
+            try
+            {
+                if (cancelRequested != null && cancelRequested()) throw new OperationCanceledException();
+                return SearchFilesCore(source, recursive, scanLimit, blockedPaths, extensions, progress, cancelRequested);
+            }
+            finally
+            {
+                System.Threading.Monitor.Exit(_discoveryGate);
+                DisposeRetiredSnapshots();
+            }
+        }
+
+        private SearchResult SearchFilesCore(
+            string source, bool recursive, int scanLimit, HashSet<string> blockedPaths,
+            IEnumerable<string> extensions, Action<ScanProgressInfo> progress, Func<bool> cancelRequested)
+        {
             // A full recursive snapshot can serve a shallow view, but a shallow
             // snapshot must NEVER pretend to cover an unvisited subtree.
             // On cold startup a direct-only request enumerates only this folder.
@@ -104,8 +142,10 @@ namespace MangaAuthorSorter
             string fullKey = baseKey + "|Depth=All";
             string shallowKey = baseKey + "|Depth=Top";
             SearchResult canonical = null;
+            bool observedChanges = false;
             lock (_sync)
             {
+                observedChanges = _snapshots.Values.Any(x => PathsMatch(x.Root, source) && x.Dirty);
                 WatchedSnapshot cached;
                 if ((_snapshots.TryGetValue(fullKey, out cached) &&
                      cached.MonitorHealthy && !cached.Dirty && cached.Result != null) ||
@@ -123,14 +163,66 @@ namespace MangaAuthorSorter
             {
                 SearchResult projected = Project(canonical, source, recursive, scanLimit);
                 projected.ProviderQueryMs = 0;
+                projected.SourceSnapshotHit = true;
+                projected.EverythingQueryCount = 0;
+                projected.SdkPrepareMs = -1;
+                projected.EverythingWaitMs = -1;
+                projected.EverythingReadMs = -1;
+                projected.DiscoveryCheckMs = -1;
+                projected.DiscoverySetMs = -1;
+                projected.DiscoveryEnumerateMs = -1;
+                projected.DiscoveryCompareMs = -1;
                 projected.IndexReconcileMs = 0;
                 return projected;
             }
 
+            // Monitor the discovery interval as well as the completed snapshot.
+            // A mutation observed during reconciliation leaves this view dirty.
+            string activeKey = recursive ? fullKey : shallowKey;
+            lock (_sync) StoreSnapshotLocked(activeKey, source, new SearchResult(), recursive, extensions);
             Stopwatch providerTimer = Stopwatch.StartNew();
-            SearchResult discovered = _inner.SearchFiles(
-                source, recursive, 0, blockedPaths, extensions,
-                progress, cancelRequested);
+            SearchResult discovered;
+            try
+            {
+                IFileSystemIndexRefreshProvider refresh = _inner as IFileSystemIndexRefreshProvider;
+                discovered = observedChanges && refresh != null
+                    ? refresh.SearchFilesAfterChange(source, recursive, 0, blockedPaths, extensions, progress, cancelRequested)
+                    : _inner.SearchFiles(source, recursive, 0, blockedPaths, extensions, progress, cancelRequested);
+                if (refresh != null)
+                    discovered = refresh.ValidateDiscoveryScope(discovered, source, recursive, blockedPaths, extensions, progress, cancelRequested);
+                bool changedDuringQuery;
+                lock (_sync) changedDuringQuery = _snapshots[activeKey].Dirty;
+                if (changedDuringQuery && refresh != null && discovered.Backend == "Everything SDK")
+                {
+                    SearchResult sdkResult = discovered;
+                    int queries = discovered.EverythingQueryCount;
+                    discovered = refresh.SearchFilesAfterChange(source, recursive, 0, blockedPaths, extensions, progress, cancelRequested);
+                    discovered.EverythingQueryCount += queries;
+                    discovered.SdkPrepareMs = sdkResult.SdkPrepareMs;
+                    discovered.EverythingWaitMs = sdkResult.EverythingWaitMs;
+                    discovered.EverythingReadMs = sdkResult.EverythingReadMs;
+                    discovered.DiscoveryCheckMs = sdkResult.DiscoveryCheckMs;
+                    discovered.DiscoverySetMs = sdkResult.DiscoverySetMs;
+                    discovered.DiscoveryEnumerateMs = sdkResult.DiscoveryEnumerateMs;
+                    discovered.DiscoveryCompareMs = sdkResult.DiscoveryCompareMs;
+                }
+                // The cache must never index or archive itself when the user
+                // chooses a source that also contains the application's folder.
+                discovered.Files.RemoveAll(x => IsInternalCachePath(x.FullName));
+                discovered.IndexFiles.RemoveAll(x => IsInternalCachePath(x.FullName));
+                discovered.IndexEntries.RemoveAll(x => IsInternalCachePath(x.FullPath));
+                discovered.ExcludedItems.RemoveAll(x => IsInternalCachePath(x.Path));
+            }
+            catch
+            {
+                lock (_sync)
+                {
+                    WatchedSnapshot failed;
+                    if (_snapshots.TryGetValue(activeKey, out failed))
+                    { _retiredSnapshots.Add(failed); _snapshots.Remove(activeKey); }
+                }
+                throw;
+            }
             providerTimer.Stop();
             Stopwatch syncTimer = Stopwatch.StartNew();
             try
@@ -158,7 +250,9 @@ namespace MangaAuthorSorter
                 lock (_sync)
                 {
                     _lastDelta = delta;
-                    StoreSnapshotLocked(recursive ? fullKey : shallowKey, source, discovered);
+                    WatchedSnapshot snapshot;
+                    if (_snapshots.TryGetValue(activeKey, out snapshot))
+                        snapshot.Result = Clone(discovered, discovered.Detail);
                 }
             }
             catch (Exception ex)
@@ -166,7 +260,12 @@ namespace MangaAuthorSorter
                 // A successful provider query remains usable if SQLite fails,
                 // but a failed reconciliation is visible in diagnostics.
                 System.Diagnostics.Debug.WriteLine("Index reconciliation failed: " + ex);
-                lock (_sync) _lastDelta = new FileIndexDelta();
+                lock (_sync)
+                {
+                    _lastDelta = new FileIndexDelta();
+                    WatchedSnapshot failed;
+                    if (_snapshots.TryGetValue(activeKey, out failed)) failed.Dirty = true;
+                }
             }
             finally
             {
@@ -440,57 +539,94 @@ namespace MangaAuthorSorter
 
         public void Dispose()
         {
+            List<WatchedSnapshot> snapshots;
             lock (_sync)
             {
-                foreach (WatchedSnapshot snapshot in _snapshots.Values)
-                    snapshot.Dispose();
+                snapshots = _snapshots.Values.Concat(_retiredSnapshots).ToList();
                 _snapshots.Clear();
+                _retiredSnapshots.Clear();
             }
+            // FileSystemWatcher.Dispose can wait for an event callback. Never
+            // hold the very lock that the callback needs while waiting for it.
+            foreach (WatchedSnapshot snapshot in snapshots) snapshot.Dispose();
+        }
+
+        private void DisposeRetiredSnapshots()
+        {
+            List<WatchedSnapshot> retired;
+            lock (_sync) { retired = _retiredSnapshots.ToList(); _retiredSnapshots.Clear(); }
+            foreach (WatchedSnapshot snapshot in retired) snapshot.Dispose();
         }
 
         private void StoreSnapshotLocked(
             string key,
             string source,
-            SearchResult result)
+            SearchResult result, bool recursive, IEnumerable<string> extensions)
         {
             WatchedSnapshot previous;
-            if (_snapshots.TryGetValue(key, out previous)) previous.Dispose();
+            long revision = 0;
+            if (!_snapshots.TryGetValue(key, out previous) && key.EndsWith("|Depth=Top", StringComparison.Ordinal))
+            {
+                WatchedSnapshot full;
+                if (_snapshots.TryGetValue(key.Substring(0, key.Length - "|Depth=Top".Length) + "|Depth=All", out full)) revision = full.Revision;
+            }
+            if (_snapshots.TryGetValue(key, out previous)) _retiredSnapshots.Add(previous);
+            if (previous != null) revision = previous.Revision;
 
             WatchedSnapshot snapshot = new WatchedSnapshot
             {
                 Key = key,
                 Root = source,
+                Recursive = recursive,
+                Revision = revision,
+                Extensions = new HashSet<string>(FileTypeRules.NormalizeExtensions(extensions), StringComparer.OrdinalIgnoreCase),
                 Result = Clone(result, result.Detail),
                 LastUsedUtc = DateTime.UtcNow
             };
             try
             {
                 FileSystemWatcher watcher = new FileSystemWatcher(source);
-                watcher.IncludeSubdirectories = true;
+                watcher.IncludeSubdirectories = recursive;
                 watcher.NotifyFilter = NotifyFilters.FileName |
                     NotifyFilters.DirectoryName |
                     NotifyFilters.LastWrite |
-                    NotifyFilters.Size |
-                    NotifyFilters.CreationTime;
+                    NotifyFilters.Size;
                 watcher.InternalBufferSize = 32768;
                 FileSystemEventHandler changed = delegate(object sender, FileSystemEventArgs e)
                 {
-                    MarkDirty(key, e != null ? e.FullPath : "");
+                    if (snapshot.Dirty) return;
+                    if (e != null && IsInternalCachePath(e.FullPath)) return;
+                    // Directory metadata notifications can be generated by
+                    // enumeration. Name events still track directory mutations.
+                    if (e != null && e.ChangeType == WatcherChangeTypes.Changed && Directory.Exists(e.FullPath)) return;
+                    if (e != null && !snapshot.Extensions.Contains(Path.GetExtension(e.FullPath).TrimStart('.')))
+                    {
+                        bool directory = Directory.Exists(e.FullPath);
+                        bool containedFiles = snapshot.Recursive && ContainsIndexedDescendants(snapshot, e.FullPath);
+                        if (!snapshot.Recursive || (!directory && !containedFiles)) return;
+                    }
+                    MarkDirty(key, snapshot, e != null ? e.FullPath : "");
                 };
                 RenamedEventHandler renamed = delegate(object sender, RenamedEventArgs e)
                 {
-                    MarkDirty(key,
+                    if (snapshot.Dirty) return;
+                    if (e != null && IsInternalCachePath(e.OldFullPath) && IsInternalCachePath(e.FullPath)) return;
+                    if (e != null && !snapshot.Extensions.Contains(Path.GetExtension(e.OldFullPath).TrimStart('.')) &&
+                        !snapshot.Extensions.Contains(Path.GetExtension(e.FullPath).TrimStart('.')) &&
+                        (!snapshot.Recursive || (!Directory.Exists(e.FullPath) && !ContainsIndexedDescendants(snapshot, e.OldFullPath)))) return;
+                    MarkDirty(key, snapshot,
                         e != null ? e.OldFullPath : "",
                         e != null ? e.FullPath : "");
                 };
-                ErrorEventHandler failed = delegate { MarkDirty(key); };
+                ErrorEventHandler failed = delegate { MarkDirty(key, snapshot); };
                 watcher.Created += changed;
                 watcher.Deleted += changed;
                 watcher.Changed += changed;
                 watcher.Renamed += renamed;
                 watcher.Error += failed;
-                watcher.EnableRaisingEvents = true;
                 snapshot.Watcher = watcher;
+                _snapshots[key] = snapshot;
+                watcher.EnableRaisingEvents = true;
                 snapshot.MonitorHealthy = true;
             }
             catch
@@ -502,10 +638,12 @@ namespace MangaAuthorSorter
             TrimSnapshotsLocked();
         }
 
-        private void MarkDirty(string key, params string[] paths)
+        private void MarkDirty(string key, WatchedSnapshot expected, params string[] paths)
         {
             lock (_sync)
             {
+                WatchedSnapshot current;
+                if (!_snapshots.TryGetValue(key, out current) || !Object.ReferenceEquals(current, expected)) return;
                 DateTime now = DateTime.UtcNow;
                 foreach (string expired in _knownMutationPaths
                     .Where(x => x.Value < now).Select(x => x.Key).ToList())
@@ -523,7 +661,7 @@ namespace MangaAuthorSorter
                 if (_snapshots.TryGetValue(key, out snapshot) && !snapshot.Dirty)
                 {
                     snapshot.Dirty = true;
-                    System.Threading.Interlocked.Increment(ref _snapshotRevision);
+                    snapshot.Revision = System.Threading.Interlocked.Increment(ref _snapshotRevision);
                 }
             }
         }
@@ -536,7 +674,7 @@ namespace MangaAuthorSorter
                     .OrderBy(x => x.LastUsedUtc)
                     .FirstOrDefault();
                 if (oldest == null) break;
-                oldest.Dispose();
+                _retiredSnapshots.Add(oldest);
                 _snapshots.Remove(oldest.Key);
             }
         }
@@ -573,6 +711,14 @@ namespace MangaAuthorSorter
             copy.DiscoveredCount = source.DiscoveredCount;
             copy.Backend = source.Backend;
             copy.ProviderQueryMs = source.ProviderQueryMs;
+            copy.EverythingQueryCount = source.EverythingQueryCount;
+            copy.SdkPrepareMs = source.SdkPrepareMs;
+            copy.EverythingWaitMs = source.EverythingWaitMs;
+            copy.EverythingReadMs = source.EverythingReadMs;
+            copy.DiscoveryCheckMs = source.DiscoveryCheckMs;
+            copy.DiscoverySetMs = source.DiscoverySetMs;
+            copy.DiscoveryEnumerateMs = source.DiscoveryEnumerateMs;
+            copy.DiscoveryCompareMs = source.DiscoveryCompareMs;
             copy.IndexReconcileMs = source.IndexReconcileMs;
             copy.Detail = detail ?? source.Detail ?? "";
             copy.ScanSession = CloneSession(source.ScanSession);
@@ -708,6 +854,29 @@ namespace MangaAuthorSorter
             }
             return copy;
         }
+
+        private bool ContainsIndexedDescendants(WatchedSnapshot snapshot, string path)
+        {
+            lock (_sync)
+            {
+                if (snapshot.Result == null) return false;
+                return snapshot.Result.IndexEntries.Any(x => IsUnderRoot(x.FullPath, path)) ||
+                    snapshot.Result.IndexFiles.Any(x => IsUnderRoot(x.FullName, path)) ||
+                    snapshot.Result.Files.Any(x => IsUnderRoot(x.FullName, path)) ||
+                    snapshot.Result.ExcludedItems.Any(x => PathsMatch(x.Path, path) || IsUnderRoot(x.Path, path));
+            }
+        }
+
+        private bool IsInternalCachePath(string path)
+        {
+            string normalized = NormalizePath(path);
+            return normalized == _databasePath || normalized == _databasePath + "-WAL" ||
+                normalized == _databasePath + "-SHM" || normalized == _databasePath + "-JOURNAL" ||
+                normalized.StartsWith(_databasePath + ".CORRUPT-", StringComparison.Ordinal);
+        }
+
+        private static bool PathsMatch(string left, string right)
+        { return String.Equals(NormalizePath(left), NormalizePath(right), StringComparison.Ordinal); }
 
         private static string NormalizePath(string path)
         {

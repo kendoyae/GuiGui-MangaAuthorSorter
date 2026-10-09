@@ -33,6 +33,7 @@ for %%L in (zh-CN en-US de-DE) do (
     copy /y "Docs\Guide.%%L.md" "RELEASE\Portable\Docs\Guide.%%L.md" >nul
     copy /y "Docs\Changelog.%%L.md" "RELEASE\Portable\Docs\Changelog.%%L.md" >nul
 )
+if exist "SourcesConfig.json" copy /y "SourcesConfig.json" "RELEASE\Portable\SourcesConfig.json" >nul
 if exist "LICENSE_NOTICES.txt" copy /y "LICENSE_NOTICES.txt" "RELEASE\Portable\LICENSE_NOTICES.txt" >nul
 if exist "Languages" xcopy /e /i /y "Languages" "RELEASE\Portable\Languages" >nul
 if exist "Assets" xcopy /e /i /y "Assets" "RELEASE\Portable\Assets" >nul

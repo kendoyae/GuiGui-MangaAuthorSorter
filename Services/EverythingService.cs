@@ -16,7 +16,7 @@ namespace MangaAuthorSorter
         private const UInt32 RequestSize = 0x00000010;
         private const UInt32 RequestDateCreated = 0x00000020;
         private const UInt32 RequestDateModified = 0x00000040;
-        private const UInt32 SortDateModifiedDescending = 14;
+        private const UInt32 SortNameAscending = 1;
         private const UInt32 AllResults = 0xffffffff;
         private readonly string _appDir;
         private readonly ScanExclusionRuleStore _scanExclusionStore;
@@ -132,13 +132,16 @@ namespace MangaAuthorSorter
                 try
                 {
                     ThrowIfCanceled(cancelRequested);
-                    EnsureSdkAvailable();
+                    Stopwatch sdkTimer = Stopwatch.StartNew();
+                    try { EnsureSdkAvailable(); }
+                    finally { r.SdkPrepareMs = sdkTimer.ElapsedMilliseconds; }
                     ThrowIfCanceled(cancelRequested);
 
                     List<ScanExcludedItem> excluded = new List<ScanExcludedItem>();
                     List<FileInfo> indexFiles = new List<FileInfo>();
                     List<SourceIndexFileSnapshot> indexEntries = new List<SourceIndexFileSnapshot>();
                     int discovered = 0;
+                    r.EverythingQueryCount++;
                     List<FileInfo> files =
                         QueryEverything(
                             source,
@@ -151,7 +154,8 @@ namespace MangaAuthorSorter
                             indexEntries,
                             out discovered,
                             progress,
-                            cancelRequested);
+                            cancelRequested,
+                            r);
 
                     ThrowIfCanceled(cancelRequested);
 
@@ -361,7 +365,7 @@ namespace MangaAuthorSorter
             try
             {
                 try { ServicePointManager.SecurityProtocol = ServicePointManager.SecurityProtocol | SecurityProtocolType.Tls12; } catch { }
-                using (WebClient wc = new WebClient())
+                using (WebClient wc = new SdkDownloadClient())
                 {
                     wc.Headers.Add("User-Agent", "MangaAuthorSorter-CSharp/1.0");
                     wc.DownloadFile("https://www.voidtools.com/Everything-SDK.zip", zip);
@@ -375,6 +379,18 @@ namespace MangaAuthorSorter
             finally
             {
                 try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { }
+            }
+        }
+
+        private sealed class SdkDownloadClient : WebClient
+        {
+            protected override WebRequest GetWebRequest(Uri address)
+            {
+                WebRequest request = base.GetWebRequest(address);
+                request.Timeout = 5000;
+                HttpWebRequest http = request as HttpWebRequest;
+                if (http != null) http.ReadWriteTimeout = 5000;
+                return request;
             }
         }
 
@@ -437,7 +453,8 @@ namespace MangaAuthorSorter
             List<SourceIndexFileSnapshot> indexEntries,
             out int discoveredCount,
             Action<ScanProgressInfo> progress,
-            Func<bool> cancelRequested)
+            Func<bool> cancelRequested,
+            SearchResult diagnostics)
         {
             discoveredCount = 0;
             List<string> normalizedExtensions =
@@ -460,7 +477,10 @@ namespace MangaAuthorSorter
             Native.SetRegex(false);
             Native.SetOffset(0);
             Native.SetMax(AllResults);
-            Native.SetSort(SortDateModifiedDescending);
+            // Name sorting is free in Everything. Date sorting can cause cold
+            // metadata work when its fast-sort index is unavailable. We already
+            // request modification timestamps, so sort those snapshots locally.
+            Native.SetSort(SortNameAscending);
             Native.SetRequestFlags(
                 RequestFullPathAndFileName |
                 RequestSize |
@@ -471,7 +491,10 @@ namespace MangaAuthorSorter
             // every descendant when recursive scanning is disabled.
             Native.SetSearch(BuildEverythingSourceQuery(sourceFull, recursive, extQuery));
 
-            if (!Native.Query(true))
+            Stopwatch queryTimer = Stopwatch.StartNew();
+            bool querySucceeded = Native.Query(true);
+            diagnostics.EverythingWaitMs = queryTimer.ElapsedMilliseconds;
+            if (!querySucceeded)
             {
                 throw new InvalidOperationException(
                     "Everything SDK 查询失败，错误代码：" +
@@ -479,7 +502,9 @@ namespace MangaAuthorSorter
             }
 
             UInt32 count = Native.GetNumResults();
+            Stopwatch readTimer = Stopwatch.StartNew();
             List<FileInfo> result = new List<FileInfo>();
+            Dictionary<string, DateTime> modifiedTimes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
             string prefix = sourceFull + Path.DirectorySeparatorChar;
 
             // Result filtering is intentionally indeterminate because global
@@ -540,6 +565,7 @@ namespace MangaAuthorSorter
                     bool hasSize = Native.GetResultSize(i, out size);
                     bool hasCreated = Native.GetResultDateCreated(i, out created);
                     bool hasModified = Native.GetResultDateModified(i, out modified);
+                    modifiedTimes[path] = hasModified ? ToDateTimeUtc(modified) : DateTime.MinValue;
                     indexEntries.Add(new SourceIndexFileSnapshot
                     {
                         FullPath = path,
@@ -568,15 +594,26 @@ namespace MangaAuthorSorter
                 result.Add(f);
             }
 
-            // Everything_SetSort(SortDateModifiedDescending) already returns
-            // newest -> oldest. Re-sorting here forced a LastWriteTime metadata
-            // read for every candidate and was especially expensive in filtered
-            // Early Stop scans. Filtering preserves the native order.
+            result = OrderByIndexedModificationTime(result, modifiedTimes);
             if (scanLimit > 0 && result.Count > scanLimit)
                 result = result.Take(scanLimit).ToList();
 
+            diagnostics.EverythingReadMs = readTimer.ElapsedMilliseconds;
+
             ReportSearchProgress(progress, result.Count, result.Count, source, false);
             return result;
+        }
+
+        internal static List<FileInfo> OrderByIndexedModificationTime(IEnumerable<FileInfo> files,
+            IDictionary<string, DateTime> modifiedTimes)
+        {
+            // FileInfo.LastWriteTime would perform a physical per-file read.
+            // Missing SDK timestamps sort last; equal timestamps stay stable.
+            return files.OrderByDescending(delegate(FileInfo file)
+            {
+                DateTime time;
+                return modifiedTimes.TryGetValue(file.FullName, out time) ? time : DateTime.MinValue;
+            }).ToList();
         }
 
         private List<FileInfo> SearchFileSystem(

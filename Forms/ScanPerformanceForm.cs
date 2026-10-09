@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -13,7 +13,7 @@ namespace MangaAuthorSorter
         private readonly string _logPath;
         private readonly Action<bool, bool, bool> _saveSettings;
         private readonly Action _showSimulation;
-        private readonly CheckBox _enabled, _warmup, _everything;
+        private readonly CheckBox _enabled, _everything;
         private readonly Label _state;
         private readonly DataGridView _grid;
         private readonly Dictionary<string, Label> _values = new Dictionary<string, Label>(StringComparer.Ordinal);
@@ -43,14 +43,13 @@ namespace MangaAuthorSorter
             switchLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             FlowLayoutPanel switches = new FlowLayoutPanel { Dock = DockStyle.Fill, Height = 30, WrapContents = false, Margin = Padding.Empty };
             _enabled = NewSwitch(L("Performance.Toggle"), ScanPerformanceDiagnostics.Enabled);
-            _warmup = NewSwitch(L("Performance.WarmupToggle"), ScanPerformanceDiagnostics.WarmupEnabled);
             _everything = NewSwitch(L("Performance.EverythingToggle"), ScanPerformanceDiagnostics.EverythingEnabled);
-            switches.Controls.Add(_enabled); switches.Controls.Add(_warmup); switches.Controls.Add(_everything);
+            switches.Controls.Add(_enabled); switches.Controls.Add(_everything);
             _state = new Label { AutoSize = true, MaximumSize = new Size(900, 0), ForeColor = UiStyle.Muted, Margin = new Padding(0, 6, 0, 0) };
             Button simulation = UiStyle.NewButton(L("Performance.SimulationButton"), 170, true);
             simulation.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             simulation.Click += delegate { if (_showSimulation != null) _showSimulation(); };
-            _enabled.CheckedChanged += SettingsChanged; _warmup.CheckedChanged += SettingsChanged; _everything.CheckedChanged += SettingsChanged;
+            _enabled.CheckedChanged += SettingsChanged; _everything.CheckedChanged += SettingsChanged;
             switchLayout.Controls.Add(switches, 0, 0);
             switchLayout.Controls.Add(simulation, 1, 0);
             switchLayout.SetRowSpan(simulation, 2);
@@ -103,6 +102,21 @@ namespace MangaAuthorSorter
             AddDataRow(data, "authors", L("Performance.UniqueAuthors"));
             AddDataRow(data, "ui", L("Performance.UiApply"));
             AddDataRow(data, "total", L("Performance.TotalResponse"));
+            AddDataRow(data, "restore", L("Performance.StartupRestore"));
+            AddDataRow(data, "validation", L("Performance.BackgroundValidation"));
+            AddDataRow(data, "queries", L("Performance.EverythingQueries"));
+            AddDataRow(data, "interactive", L("Performance.FirstInteractive"));
+            AddDataRow(data, "windowShown", L("Performance.StartupWindowShown"));
+            AddDataRow(data, "startupStages", L("Performance.StartupInitializationStages"));
+            AddDataRow(data, "startupTrace", L("Performance.StartupUiTrace"));
+            AddDataRow(data, "recognized", L("Performance.ActualRecognitions"));
+            AddDataRow(data, "sdkPrepare", L("Performance.SdkPrepare"));
+            AddDataRow(data, "everythingWait", L("Performance.EverythingWait"));
+            AddDataRow(data, "everythingRead", L("Performance.EverythingRead"));
+            AddDataRow(data, "discoveryCheck", L("Performance.DiscoveryCheck"));
+            AddDataRow(data, "discoveryCompare", L("Performance.DiscoveryCompare"));
+            AddDataRow(data, "discoveryEnumerate", L("Performance.DiscoveryEnumerate"));
+            AddDataRow(data, "discoverySet", L("Performance.DiscoverySet"));
             Panel dataScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
             dataScroll.Controls.Add(data);
             dataPane.Controls.Add(dataScroll, 0, 1);
@@ -137,7 +151,7 @@ namespace MangaAuthorSorter
         private CheckBox NewSwitch(string text, bool value) { return new CheckBox { AutoSize = true, Text = text, Checked = value, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 3, 24, 0) }; }
         private void AddDataRow(TableLayoutPanel panel, string id, string name)
         {
-            int row = panel.RowCount++; panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            int row = panel.RowCount++; panel.RowStyles.Add(new RowStyle(SizeType.Absolute, id == "startupTrace" ? 260 : 24));
             panel.Controls.Add(new Label { Dock = DockStyle.Fill, Text = name, ForeColor = UiStyle.Muted, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true }, 0, row);
             Label value = new Label { Dock = DockStyle.Fill, Text = "—", Font = new Font(Font, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
             panel.Controls.Add(value, 1, row); _values[id] = value;
@@ -155,7 +169,7 @@ namespace MangaAuthorSorter
             menu.Items.Add(copy); UiStyle.StyleMenu(menu); grid.ContextMenuStrip = menu; return grid;
         }
         private void SettingsChanged(object sender, EventArgs e)
-        { ScanPerformanceDiagnostics.Enabled = _enabled.Checked; ScanPerformanceDiagnostics.WarmupEnabled = _warmup.Checked; ScanPerformanceDiagnostics.EverythingEnabled = _everything.Checked; if (_saveSettings != null) _saveSettings(_enabled.Checked, _warmup.Checked, _everything.Checked); UpdateState(); }
+        { ScanPerformanceDiagnostics.Enabled = _enabled.Checked; ScanPerformanceDiagnostics.EverythingEnabled = _everything.Checked; if (_saveSettings != null) _saveSettings(_enabled.Checked, true, _everything.Checked); UpdateState(); }
         private void UpdateState() { _state.Text = L(_enabled.Checked ? "Performance.State.On" : "Performance.State.Off"); }
         private void OnEntryAdded(ScanPerformanceEntry entry)
         { if (IsDisposed || Disposing) return; if (InvokeRequired) { try { BeginInvoke(new Action<ScanPerformanceEntry>(OnEntryAdded), entry); } catch { } return; } AddEntry(entry); _grid.ClearSelection(); _grid.Rows[_grid.Rows.Count - 1].Selected = true; }
@@ -173,6 +187,21 @@ namespace MangaAuthorSorter
             ScanPerformanceEntry e = SelectedEntry(); foreach (Label label in _values.Values) label.Text = "—";
             if (e != null)
             {
+                if (e.StartupRestoreMs >= 0) SetMs("restore", e.StartupRestoreMs, true);
+                if (e.BackgroundValidationMs >= 0) SetMs("validation", e.BackgroundValidationMs, true);
+                if (e.EverythingQueryCount >= 0) _values["queries"].Text = e.EverythingQueryCount.ToString();
+                if (e.FirstInteractiveMs >= 0) SetMs("interactive", e.FirstInteractiveMs, true);
+                SetMs("windowShown", e.StartupWindowShownMs, e.StartupWindowShownMs >= 0);
+                _values["startupStages"].Text = StartupStages(e);
+                _values["startupTrace"].Text = FormatStartupTrace(e.StartupUiTrace, true);
+                if (e.ActualRecognitions >= 0) _values["recognized"].Text = e.ActualRecognitions.ToString("N0");
+                SetMs("sdkPrepare", e.SdkPrepareMs, e.SdkPrepareMs >= 0);
+                SetMs("everythingWait", e.EverythingWaitMs, e.EverythingWaitMs >= 0);
+                SetMs("everythingRead", e.EverythingReadMs, e.EverythingReadMs >= 0);
+                SetMs("discoveryCheck", e.DiscoveryCheckMs, e.DiscoveryCheckMs >= 0);
+                SetMs("discoveryCompare", e.DiscoveryCompareMs, e.DiscoveryCompareMs >= 0);
+                SetMs("discoveryEnumerate", e.DiscoveryEnumerateMs, e.DiscoveryEnumerateMs >= 0);
+                SetMs("discoverySet", e.DiscoverySetMs, e.DiscoverySetMs >= 0);
                 _values["node"].Text = e.SnapshotHit ? L("Performance.Node.Ready") : L("Performance.Status.Direct");
                 _values["date"].Text = e.Time.ToString("yyyy-MM-dd HH:mm:ss"); _values["provider"].Text = Provider(e.Provider); _values["results"].Text = e.ResultCount.ToString("N0");
                 SetMs("discovery", e.FileDiscoveryMs, true);
@@ -207,9 +236,10 @@ namespace MangaAuthorSorter
             if (ShouldShowWarmupForSelection(e, _warmupStatus))
             {
                 _values["node"].Text = WarmupState(_warmupStatus.State); _values["date"].Text = _warmupStatus.Time.ToString("yyyy-MM-dd HH:mm:ss");
-                _values["stage"].Text = String.IsNullOrWhiteSpace(_warmupStatus.Stage) ? "—" : _warmupStatus.Stage;
+                _values["stage"].Text = String.IsNullOrWhiteSpace(_warmupStatus.Stage) ? "—" :
+                    (_warmupStatus.Stage.StartsWith("Performance.", StringComparison.Ordinal) ? L(_warmupStatus.Stage) : _warmupStatus.Stage);
                 _values["error"].Text = String.IsNullOrWhiteSpace(_warmupStatus.Error) ? "—" : _warmupStatus.Error;
-                if (!String.IsNullOrWhiteSpace(_warmupStatus.Provider)) { _values["provider"].Text = Provider(_warmupStatus.Provider); _values["results"].Text = _warmupStatus.CandidateCount.ToString("N0"); }
+                if (!String.IsNullOrWhiteSpace(_warmupStatus.Provider)) { _values["provider"].Text = Provider(_warmupStatus.Provider); if (_warmupStatus.CandidateCount >= 0) _values["results"].Text = _warmupStatus.CandidateCount.ToString("N0"); }
                 bool discoveryReady = _warmupStatus.State == ScanWarmupState.PartiallyReady || _warmupStatus.State == ScanWarmupState.Ready;
                 SetMs("target", _warmupStatus.TargetIndexMs, true); SetMs("discovery", _warmupStatus.FileDiscoveryMs, discoveryReady);
                 SetMs("snapshot", _warmupStatus.SnapshotPrepareMs, _warmupStatus.State == ScanWarmupState.Ready);
@@ -225,7 +255,7 @@ namespace MangaAuthorSorter
         }
         internal static bool ShouldShowWarmupForSelection(ScanPerformanceEntry selected, ScanWarmupStatusEntry warmup)
         { return selected == null && warmup != null; }
-        private void SetMs(string id, long value, bool available) { _values[id].Text = available ? value + " ms" : "—"; }
+        private void SetMs(string id, long value, bool available) { _values[id].Text = available && value >= 0 ? value + " ms" : "—"; }
         private string CacheRatio(long hits, long misses)
         {
             long total = hits + misses;
@@ -257,8 +287,23 @@ namespace MangaAuthorSorter
             Add(s, "Performance.IndexDelta", IndexSummary(e));
             Add(s, "Performance.PlanCache", e.PlanCacheHits.ToString());
             Add(s, "Performance.Recalculated", e.RecalculatedFiles.ToString());
+            Add(s, "Performance.StartupRestore", e.StartupRestoreMs >= 0 ? e.StartupRestoreMs + " ms" : "—");
+            Add(s, "Performance.FirstInteractive", e.FirstInteractiveMs >= 0 ? e.FirstInteractiveMs + " ms" : "—");
+            Add(s, "Performance.StartupWindowShown", e.StartupWindowShownMs >= 0 ? e.StartupWindowShownMs + " ms" : "—");
+            Add(s, "Performance.StartupInitializationStages", StartupStages(e));
+            Add(s, "Performance.StartupUiTrace", FormatStartupTrace(e.StartupUiTrace));
+            Add(s, "Performance.BackgroundValidation", e.BackgroundValidationMs >= 0 ? e.BackgroundValidationMs + " ms" : "—");
+            Add(s, "Performance.EverythingQueries", e.EverythingQueryCount >= 0 ? e.EverythingQueryCount.ToString() : "—");
+            Add(s, "Performance.ActualRecognitions", e.ActualRecognitions >= 0 ? e.ActualRecognitions.ToString() : "—");
             Metric(s, "Performance.Snapshot", e.SnapshotPrepareMs); Metric(s, "Performance.WarmupWait", e.WarmupWaitMs); Metric(s, "Performance.FileDiscovery", e.FileDiscoveryMs);
             Metric(s, "Performance.ProviderQuery", e.ProviderQueryMs);
+            Add(s, "Performance.SdkPrepare", e.SdkPrepareMs >= 0 ? e.SdkPrepareMs + " ms" : "—");
+            Add(s, "Performance.EverythingWait", e.EverythingWaitMs >= 0 ? e.EverythingWaitMs + " ms" : "—");
+            Add(s, "Performance.EverythingRead", e.EverythingReadMs >= 0 ? e.EverythingReadMs + " ms" : "—");
+            Add(s, "Performance.DiscoveryCheck", e.DiscoveryCheckMs >= 0 ? e.DiscoveryCheckMs + " ms" : "—");
+            Add(s, "Performance.DiscoveryCompare", e.DiscoveryCompareMs >= 0 ? e.DiscoveryCompareMs + " ms" : "—");
+            Add(s, "Performance.DiscoveryEnumerate", e.DiscoveryEnumerateMs >= 0 ? e.DiscoveryEnumerateMs + " ms" : "—");
+            Add(s, "Performance.DiscoverySet", e.DiscoverySetMs >= 0 ? e.DiscoverySetMs + " ms" : "—");
             Metric(s, "Performance.IndexReconcile", e.IndexReconcileMs);
             Add(s, "Performance.PlanCacheRead", e.PlanCacheReadMs + " ms");
             Add(s, "Performance.PlanCacheWrite", e.PlanCacheWriteMs + " ms");
@@ -277,6 +322,28 @@ namespace MangaAuthorSorter
                 Add(s, "Performance.UniqueAuthors", e.UniqueAuthors + " / " + e.NewAuthorFolders + " (" + L("Performance.NewFoldersShort") + ")");
             }
             Metric(s, "Performance.UiApply", e.UiApplyMs); Metric(s, "Performance.TotalResponse", e.TotalResponseMs); return s.ToString().TrimEnd();
+        }
+        private string FormatStartupTrace(string trace, bool brief = false)
+        {
+            if (String.IsNullOrEmpty(trace)) return "—";
+            StringBuilder text = new StringBuilder();
+            foreach (string field in trace.Split(';'))
+            {
+                int colon = field.IndexOf(':'); long ms;
+                if (colon < 1 || !Int64.TryParse(field.Substring(colon + 1), out ms) || ms < 0) continue;
+                if (brief && Array.IndexOf(new[] { "Controls", "Menu", "Grid", "FirstPaint", "CacheGridPaint", "Responsive" },
+                    field.Substring(0, colon)) < 0) continue;
+                string labelKey = "Performance.StartupTrace." + field.Substring(0, colon);
+                text.AppendLine(L(labelKey) + ": " + ms + " ms");
+            }
+            return text.Length == 0 ? "—" : text.ToString().TrimEnd();
+        }
+        private static string StartupStages(ScanPerformanceEntry e)
+        {
+            string[] parts = (e.StartupInitializationStages ?? "").Split(',');
+            long value;
+            if (parts.Length != 4 || Array.Exists(parts, x => !Int64.TryParse(x, out value) || value < 0)) return "—";
+            return String.Join(" / ", parts) + " ms";
         }
         private void Add(StringBuilder s, string key, string value) { s.AppendLine(L(key) + ": " + value); }
         private void Metric(StringBuilder s, string key, long value) { if (value > 0) Add(s, key, value + " ms"); }

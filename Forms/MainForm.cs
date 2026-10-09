@@ -148,6 +148,20 @@ namespace MangaAuthorSorter
         private string _currentAuthorFolderTemplate =
             AuthorFolderNaming.DefaultTemplate;
         private bool _hasCompletedScanSession;
+        private bool _loadingStartupSettings = true;
+        private bool _restoredPlanNeedsValidation;
+        private long _startupRestoreMs;
+        private readonly Stopwatch _startupClock = Stopwatch.StartNew();
+        private long _startupInteractiveMs = -1;
+        private long _startupWindowShownMs = -1;
+        private readonly long[] _startupInitializationStages = new long[4];
+        private readonly StartupUiTrace _startupTrace;
+        private readonly StartupValidationTiming _startupValidationTiming;
+        private bool _startupCacheApplied, _startupApplyingCache, _startupResponsive;
+        internal enum StartupValidationTiming { Immediate, AfterResponsive, DisabledForExperiment }
+        private bool _closeAfterScanCancellation;
+        private System.Windows.Forms.Timer _scanSettingsRefreshTimer;
+        private bool _lastCompletedRecursive;
         private string _lastCompletedSourceKey = "";
         private string _lastCompletedPlanKey = "";
         private string _lastCompletedTargetVersion = "";
@@ -176,6 +190,7 @@ namespace MangaAuthorSorter
         private SimulationPerformanceForm _simulationPerformanceForm;
         private DeveloperPanelForm _developerPanelForm;
         private AuthorEntityLibraryForm _authorEntityLibraryForm;
+        private OnlineAuthorSettingsForm _onlineAuthorSettingsForm;
         private AuthorReferenceLibraryForm _authorReferenceLibraryForm;
         private decimal _safetyReserveGb = 5M;
         private bool _onlineAuthorLookupEnabled;
@@ -184,8 +199,8 @@ namespace MangaAuthorSorter
         private int _maxOnlineLookupsPerScan = 20;
         private bool _useLocalAuthorReference = true;
         private bool _useEhentaiLookup = true;
-        private bool _useNhentaiLookup = true;
-        private string _nhentaiApiKey = "";
+
+
         private AuthorRecognitionMode _recognitionMode = AuthorRecognitionMode.Classic;
 
         private sealed class ScanRequest
@@ -207,8 +222,8 @@ namespace MangaAuthorSorter
             public int MaxOnlineLookups = 20;
             public bool UseLocalReference = true;
             public bool UseEhentai = true;
-            public bool UseNhentai = true;
-            public string NhentaiApiKey = "";
+
+
             public ScanWarmupRequest WarmupRequest;
         }
 
@@ -282,19 +297,13 @@ namespace MangaAuthorSorter
             public string Detail = "";
         }
 
-        private sealed class GroupNumberingRuleItem
-        {
-            public string Id = "";
-            public string Display = "";
 
-            public override string ToString()
-            {
-                return Display;
-            }
-        }
+        public MainForm() : this(StartupValidationTiming.Immediate) { }
 
-        public MainForm()
+        internal MainForm(StartupValidationTiming validationTiming)
         {
+            _startupTrace = new StartupUiTrace(_startupClock);
+            _startupValidationTiming = validationTiming;
             _appDir = AppDomain.CurrentDomain.BaseDirectory;
 
             // Load persisted language preference first. On the first run,
@@ -317,6 +326,7 @@ namespace MangaAuthorSorter
 
             _language.Initialize(
                 initialSettings.LanguageCode);
+            _startupInitializationStages[0] = _startupClock.ElapsedMilliseconds;
 
             // Data-file names stay language-neutral. Only the explanatory
             // comments written when a file is first created follow the
@@ -381,8 +391,7 @@ namespace MangaAuthorSorter
             _maxOnlineLookupsPerScan = initialSettings.MaxOnlineLookupsPerScan;
             _useLocalAuthorReference = initialSettings.UseLocalAuthorReference;
             _useEhentaiLookup = initialSettings.UseEhentaiLookup;
-            _useNhentaiLookup = initialSettings.UseNhentaiLookup;
-            _nhentaiApiKey = initialSettings.NhentaiApiKey;
+
             _recognitionMode = initialSettings.RecognitionMode;
 
             _engine =
@@ -396,6 +405,7 @@ namespace MangaAuthorSorter
                     _appDir,
                     _scanExclusionStore);
 
+            _startupInitializationStages[1] = _startupClock.ElapsedMilliseconds - _startupInitializationStages[0];
             IFileSystemIndexProvider providerRouter =
                 new FileSystemIndexProviderRouter(
                     new EverythingProvider(_everything),
@@ -408,17 +418,18 @@ namespace MangaAuthorSorter
             {
                 _fileIndexCache.Open();
                 _fileIndexCache.MarkActive();
+                string tagCleaningVersion = GetCacheFileVersion(AppFiles.TagCleaningRules);
                 _fileIndexCacheReady = true;
                 _parsedMetadataCache = new ParsedMetadataCacheService(
                     _fileIndexCache,
-                    GetCacheFileVersion(AppFiles.TagCleaningRules));
+                    tagCleaningVersion);
                 _engine.ParsedMetadataCache = _parsedMetadataCache;
                 _recognitionFactCache = new RecognitionFactCacheService(
                     _fileIndexCache,
                     GetCacheFileVersion(AppFiles.AuthorAliases),
                     GetCacheFileVersion(AppFiles.AuthorEntities),
-                    GetCacheFileVersion(AppFiles.AuthorIndexDatabase),
-                    "RecognitionRules=4|Mode=" + _recognitionMode.ToString());
+                    _authorEntityStore.PublicDatabaseVersion,
+                    "RecognitionRules=6|Mode=" + _recognitionMode.ToString() + "|Tag=" + tagCleaningVersion);
                 _engine.RecognitionFactCache = _recognitionFactCache;
                 _destinationIndexCache = new DestinationIndexCacheService(_fileIndexCache);
                 _engine.DestinationIndexCache = _destinationIndexCache;
@@ -434,12 +445,8 @@ namespace MangaAuthorSorter
             }
 
             _scanWarmup = new ScanWarmupService(_fileSystemProvider);
-            try
-            {
-                string legacySnapshot = Path.Combine(_appDir, "Cache", "ScanWarmupSnapshot.json");
-                if (File.Exists(legacySnapshot)) File.Delete(legacySnapshot);
-            }
-            catch { }
+            // SQLite owns current restoration; preserve any legacy snapshot on
+            // disk so upgrading never destroys a user's last recoverable data.
 
             ScanPerformanceDiagnostics.Initialize(
                 Path.Combine(_appDir, AppFiles.ScanPerformanceLog),
@@ -447,8 +454,14 @@ namespace MangaAuthorSorter
                 initialSettings.ScanWarmupEnabled,
                 initialSettings.EverythingEnabled);
 
-            InitializeUi();
-            LoadPersistentPaths();
+            _startupInitializationStages[2] = _startupClock.ElapsedMilliseconds - _startupInitializationStages[0] - _startupInitializationStages[1];
+            SuspendLayout();
+            try { InitializeUi(); LoadPersistentPaths(); }
+            finally { long resumeStart = _startupTrace.Now; ResumeLayout(true); _startupTrace.Interval("ResumeLayout", resumeStart); }
+            _startupInitializationStages[3] = _startupClock.ElapsedMilliseconds - _startupInitializationStages[0] - _startupInitializationStages[1] - _startupInitializationStages[2];
+            _startupTrace.Point("UiInitialized");
+            _loadingStartupSettings = false;
+            Shown += delegate { _startupWindowShownMs = _startupClock.ElapsedMilliseconds; _startupTrace.Point("Shown"); RestorePreviousScanAsync(); };
             InitializeScanWarmup();
             // Build the read-only public author identity index once in the
             // background. Normal scans can then resolve canonical names, aliases
@@ -465,6 +478,9 @@ namespace MangaAuthorSorter
             RefreshExecutionSafetyUi();
             UpdateMainActionAvailability();
             UpdateWorkflowGuidanceStatus();
+
+            if (_fileIndexCacheReady && _fileIndexCache.WasRecoveredFromCorruption)
+                _lblStatus.Text = L("Status.CacheRebuilt");
 
             FormClosed += delegate
             {
@@ -532,18 +548,71 @@ namespace MangaAuthorSorter
                     if (_isScanning)
                     {
                         e.Cancel = true;
+                        _closeAfterScanCancellation = true;
                         RequestScanCancellation();
-                        UiMessageBox.Show(
-                            this,
-                            L("Status.ScanningCloseBlocked"),
-                            L("Status.ScanningTitle"),
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information);
                         return;
                     }
 
                     SavePersistentPaths();
+                    _settingsStore.UpdateListViewFilter(_viewFilter);
                 };
+            _startupTrace.Point("ConstructorEnd");
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            bool measure = value && _startupTrace != null && _startupTrace.Milliseconds("VisibleEnd") < 0;
+            long start = measure ? _startupTrace.Now : 0;
+            if (measure) _startupTrace.Point("VisibleStart");
+            base.SetVisibleCore(value);
+            if (measure) { _startupTrace.Interval("Visible", start); _startupTrace.Point("VisibleEnd"); }
+        }
+        protected override void OnShown(EventArgs e)
+        {
+            long start = _startupTrace.Now;
+            _startupTrace.Point("ShownStart");
+            base.OnShown(e);
+            _startupTrace.Interval("ShownHandlers", start);
+        }
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            long start = _startupTrace == null ? 0 : _startupTrace.Now;
+            base.OnHandleCreated(e);
+            if (_startupTrace != null) { _startupTrace.Interval("Handle", start); _startupTrace.Point("HandleCreated"); }
+        }
+        protected override void OnLoad(EventArgs e)
+        {
+            long start = _startupTrace.Now;
+            _startupTrace.Point("LoadStart");
+            base.OnLoad(e);
+            _startupTrace.Interval("Load", start); _startupTrace.Point("LoadEnd");
+        }
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            long start = _startupTrace == null ? 0 : _startupTrace.Now;
+            base.OnLayout(e);
+            if (_startupTrace != null && !_startupResponsive) _startupTrace.Interval("Layout", start);
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (_startupTrace != null) _startupTrace.Point("FirstPaint");
+        }
+        private void MarkStartupResponsive()
+        {
+            if (IsDisposed || Disposing || _startupResponsive || !_startupCacheApplied) return;
+            _startupResponsive = true;
+            _startupTrace.Point("Responsive");
+            if (_startupValidationTiming == StartupValidationTiming.AfterResponsive)
+                BeginInvoke(new Action(StartStartupValidation));
+        }
+        private void StartStartupValidation()
+        {
+            if (IsDisposed || Disposing || _isScanning || _isExecuting) return;
+            _startupTrace.Point("ValidationDispatch");
+            long start = _startupTrace.Now;
+            try { ScanPreview(true); }
+            finally { _startupTrace.Interval("ValidationSetup", start); }
         }
 
         private string L(string key)
@@ -561,41 +630,7 @@ namespace MangaAuthorSorter
             return _language.TranslateSource(source);
         }
 
-        private string GetScanModeDisplayName(
-            ScanModeKind mode)
-        {
-            switch (mode)
-            {
-                case ScanModeKind.Exact:
-                    return L("ScanMode.Exact");
-                case ScanModeKind.NewAuthor:
-                    return L("ScanMode.New");
-                case ScanModeKind.Ambiguous:
-                    return L("ScanMode.Ambiguous");
-                case ScanModeKind.Unrecognized:
-                    return L("ScanMode.Unrecognized");
-                default:
-                    return L("ScanMode.Global");
-            }
-        }
 
-        private string GetScanModeDescription(
-            ScanModeKind mode)
-        {
-            switch (mode)
-            {
-                case ScanModeKind.Exact:
-                    return L("ScanMode.Exact.Desc");
-                case ScanModeKind.NewAuthor:
-                    return L("ScanMode.New.Desc");
-                case ScanModeKind.Ambiguous:
-                    return L("ScanMode.Ambiguous.Desc");
-                case ScanModeKind.Unrecognized:
-                    return L("ScanMode.Unrecognized.Desc");
-                default:
-                    return L("ScanMode.Global.Desc");
-            }
-        }
 
         private string GetFileTypeProfileDisplayName(
             FileTypeProfile profile)
@@ -723,35 +758,6 @@ namespace MangaAuthorSorter
                 LF("FileTypes.More", list.Count);
         }
 
-        private string LocalizeSearchDetail(string detail)
-        {
-            string value = detail ?? "";
-
-            if (value == "Everything 官方 SDK 高速模式")
-                return L("SearchDetail.EverythingFast");
-            if (value == "Everything 官方 SDK 高速模式（结果 0）")
-                return L("SearchDetail.EverythingFastZero");
-            if (value == "Everything SDK 返回 0 个结果，但本地目录存在符合当前文件类型设置的文件；本次已自动回退普通模式")
-                return L("SearchDetail.FallbackNoResults");
-            if (value == "Everything 未运行，使用普通文件系统扫描")
-                return L("SearchDetail.FileSystem");
-            if (value == "SourceIndex 命中；文件系统无变化")
-                return L("SearchDetail.SourceIndexHit");
-
-            const string fallbackPrefix =
-                "Everything 已运行，但 SDK 查询失败；已自动回退：";
-
-            if (value.StartsWith(fallbackPrefix, StringComparison.Ordinal))
-                return LF("SearchDetail.FallbackFailed", value.Substring(fallbackPrefix.Length));
-
-            const string errorPrefix =
-                "Everything SDK 查询失败，错误代码：";
-
-            if (value.StartsWith(errorPrefix, StringComparison.Ordinal))
-                return LF("SearchDetail.SDKQueryError", value.Substring(errorPrefix.Length));
-
-            return value;
-        }
 
         private string LocalizePlanStatus(string status)
         {
@@ -905,6 +911,14 @@ namespace MangaAuthorSorter
 
         private void InitializeUi()
         {
+            long start = _startupTrace.Now;
+            try { InitializeUiCore(); }
+            finally { _startupTrace.Interval("Controls", start); }
+        }
+
+        private void InitializeUiCore()
+        {
+            long fontStart = _startupTrace.Now;
             UiStyle.ApplyAppIcon(this);
             Text = L("App.Title") + " " + AppVersion.Display;
             StartPosition = FormStartPosition.CenterScreen;
@@ -913,6 +927,7 @@ namespace MangaAuthorSorter
             Font = SystemFonts.MessageBoxFont;
             BackColor = Color.White;
             AutoScaleMode = AutoScaleMode.Dpi;
+            _startupTrace.Interval("FontDpi", fontStart);
 
             BuildTopMenu();
 
@@ -992,6 +1007,13 @@ namespace MangaAuthorSorter
         }
 
         private void BuildWorkspaceHeader(Control parent)
+        {
+            long start = _startupTrace.Now;
+            try { BuildWorkspaceHeaderCore(parent); }
+            finally { _startupTrace.Interval("Header", start); }
+        }
+
+        private void BuildWorkspaceHeaderCore(Control parent)
         {
             _headerPanel = new Panel();
             _headerPanel.Dock = DockStyle.Fill;
@@ -1080,6 +1102,7 @@ namespace MangaAuthorSorter
                 if (_lblStatus != null && _plan.Count > 0)
                     _lblStatus.Text = L("Status.ModeChanged");
                 ApplyCurrentGridFilter(null);
+                RememberScanSettings();
             };
             flow.Controls.Add(_cmbScanMode);
 
@@ -1114,7 +1137,7 @@ namespace MangaAuthorSorter
             _numScanLimit.ThousandsSeparator = true;
             _numScanLimit.TextAlign = HorizontalAlignment.Center;
             _numScanLimit.Margin = new Padding(0, 2, 10, 0);
-            _numScanLimit.ValueChanged += delegate { ApplyCurrentGridFilter(null); };
+            _numScanLimit.ValueChanged += delegate { ApplyCurrentGridFilter(null); RememberScanSettings(); };
             flow.Controls.Add(_numScanLimit);
             _scanCountToolTip = new ToolTip();
             _scanCountToolTip.ShowAlways = true;
@@ -1125,7 +1148,7 @@ namespace MangaAuthorSorter
             _chkRecursive.Text = L("Main.Recursive");
             _chkRecursive.AutoSize = true;
             _chkRecursive.Margin = new Padding(0, 6, 0, 0);
-            _chkRecursive.CheckedChanged += delegate { ScheduleScanWarmup(false); };
+            _chkRecursive.CheckedChanged += delegate { ScheduleScanWarmup(false); RememberScanSettings(); };
             flow.Controls.Add(_chkRecursive);
 
             Panel bottomBorder = new Panel();
@@ -1174,6 +1197,7 @@ namespace MangaAuthorSorter
                 _txtSource = textBox;
                 _btnBrowseSource = browse;
                 _txtSource.TextChanged += delegate { HandlePathEditorChanged(); };
+                _txtSource.Leave += delegate { if (!_loadingStartupSettings) SavePersistentPaths(); };
                 browse.Click += delegate { BrowseFolder(_txtSource, L("Menu.OpenSource")); };
             }
             else
@@ -1181,6 +1205,7 @@ namespace MangaAuthorSorter
                 _txtRoot = textBox;
                 _btnBrowseTarget = browse;
                 _txtRoot.TextChanged += delegate { HandlePathEditorChanged(); };
+                _txtRoot.Leave += delegate { if (!_loadingStartupSettings) SavePersistentPaths(); };
                 browse.Click += delegate { BrowseFolder(_txtRoot, L("Menu.OpenTarget")); };
             }
 
@@ -1302,7 +1327,7 @@ namespace MangaAuthorSorter
 
             if (_btnExecute != null)
             {
-                if (_isScanning || _isExecuting)
+                if (_isScanning || _isExecuting || _restoredPlanNeedsValidation)
                 {
                     _btnExecute.Enabled = false;
                 }
@@ -1408,6 +1433,13 @@ namespace MangaAuthorSorter
         }
 
         private void BuildBodyWorkspace(Panel body)
+        {
+            long start = _startupTrace.Now;
+            try { BuildBodyWorkspaceCore(body); }
+            finally { _startupTrace.Interval("Body", start); }
+        }
+
+        private void BuildBodyWorkspaceCore(Panel body)
         {
             // Main workspace uses the full width; navigation is handled by the filter bar and top menus.
             // The main list now uses the whole available width; History lives
@@ -2269,6 +2301,13 @@ namespace MangaAuthorSorter
 
         private void BuildTopMenu()
         {
+            long start = _startupTrace.Now;
+            try { BuildTopMenuCore(); }
+            finally { _startupTrace.Interval("Menu", start); }
+        }
+
+        private void BuildTopMenuCore()
+        {
             MenuStrip menu = new MenuStrip();
             _topMenu = menu;
             menu.Dock = DockStyle.Top;
@@ -2500,49 +2539,7 @@ namespace MangaAuthorSorter
             Controls.Add(menu);
         }
 
-        private GroupNumberingRuleItem[] GetGroupNumberingRuleItems()
-        {
-            return new GroupNumberingRuleItem[]
-            {
-                new GroupNumberingRuleItem
-                {
-                    Id = GroupNaming.RuleNumeric,
-                    Display = L("GroupNumbering.Numeric")
-                },
-                new GroupNumberingRuleItem
-                {
-                    Id = GroupNaming.RuleNumeric2,
-                    Display = L("GroupNumbering.Numeric2")
-                },
-                new GroupNumberingRuleItem
-                {
-                    Id = GroupNaming.RuleNumeric3,
-                    Display = L("GroupNumbering.Numeric3")
-                },
-                new GroupNumberingRuleItem
-                {
-                    Id = GroupNaming.RuleAlphaUpper,
-                    Display = L("GroupNumbering.AlphaUpper")
-                },
-                new GroupNumberingRuleItem
-                {
-                    Id = GroupNaming.RuleAlphaLower,
-                    Display = L("GroupNumbering.AlphaLower")
-                }
-            };
-        }
 
-        private static string GetSelectedGroupRuleId(ComboBox combo)
-        {
-            GroupNumberingRuleItem item =
-                combo != null
-                    ? combo.SelectedItem as GroupNumberingRuleItem
-                    : null;
-
-            return item != null
-                ? item.Id
-                : GroupNaming.DefaultRuleId;
-        }
 
         private void ShowLanguagePackCheck()
         {
@@ -2560,7 +2557,8 @@ namespace MangaAuthorSorter
                 Decimal.ToInt32(_numMax.Value),
                 _txtGroupTemplate.Text,
                 _authorFolderTemplateSetting,
-                _safetyReserveGb))
+                _safetyReserveGb,
+                _authorEntityStore))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK)
                     return;
@@ -2604,7 +2602,7 @@ namespace MangaAuthorSorter
             _engine.RecognitionMode = mode;
             if (_recognitionFactCache != null)
                 _recognitionFactCache.UpdateRuleVersion(
-                    "RecognitionRules=4|Mode=" + mode.ToString());
+                    "RecognitionRules=6|Mode=" + mode.ToString() + "|Tag=" + GetCacheFileVersion(AppFiles.TagCleaningRules));
             _settingsStore.UpdateRecognitionMode(mode);
             _scanWarmup.Cancel();
             UpdateRecognitionModeMenu();
@@ -2652,19 +2650,6 @@ namespace MangaAuthorSorter
             }
         }
 
-        private void ShowLastScanExcludedItems()
-        {
-            if (_lastScanExcludedItems == null || _lastScanExcludedItems.Count == 0)
-                return;
-
-            using (ScanExcludedItemsForm dlg = new ScanExcludedItemsForm(
-                _language,
-                Font,
-                _lastScanExcludedItems))
-            {
-                dlg.ShowDialog(this);
-            }
-        }
 
         private void UpdateScanExcludedLink()
         {
@@ -2676,32 +2661,31 @@ namespace MangaAuthorSorter
 
         private void ShowOnlineAuthorSettingsDialog(IWin32Window owner)
         {
-            using (OnlineAuthorSettingsForm dlg = new OnlineAuthorSettingsForm(
-                _language,
-                Font,
-                _onlineAuthorLookupEnabled,
-                _onlineAuthorProvider,
-                _saveOnlineAuthorCache,
-                _maxOnlineLookupsPerScan,
-                _useLocalAuthorReference,
-                _useEhentaiLookup,
-                _useNhentaiLookup,
-                _nhentaiApiKey,
-                _authorEntityStore.Path,
-                ShowAuthorEntityLibrary,
-                ShowAuthorReferenceLibrary))
+            if (_onlineAuthorSettingsForm != null && !_onlineAuthorSettingsForm.IsDisposed)
             {
-                if (dlg.ShowDialog(owner ?? this) != DialogResult.OK)
-                    return;
-
+                if (_onlineAuthorSettingsForm.WindowState == FormWindowState.Minimized) _onlineAuthorSettingsForm.WindowState = FormWindowState.Normal;
+                if (!_onlineAuthorSettingsForm.Visible) _onlineAuthorSettingsForm.Show(this);
+                _onlineAuthorSettingsForm.BringToFront();
+                _onlineAuthorSettingsForm.Activate();
+                return;
+            }
+            OnlineAuthorSettingsForm dlg = new OnlineAuthorSettingsForm(
+                _language, Font, _onlineAuthorLookupEnabled, _onlineAuthorProvider,
+                _saveOnlineAuthorCache, _maxOnlineLookupsPerScan, _useLocalAuthorReference,
+                _useEhentaiLookup,
+                _authorEntityStore.Path, ShowAuthorEntityLibrary, ShowAuthorReferenceLibrary);
+            _onlineAuthorSettingsForm = dlg;
+            dlg.FormClosed += delegate
+            {
+                if (ReferenceEquals(_onlineAuthorSettingsForm, dlg)) _onlineAuthorSettingsForm = null;
+                if (dlg.DialogResult != DialogResult.OK) return;
                 _onlineAuthorLookupEnabled = dlg.LookupEnabled;
                 _onlineAuthorProvider = dlg.ProviderId;
                 _saveOnlineAuthorCache = dlg.SaveCache;
                 _maxOnlineLookupsPerScan = dlg.MaxLookupsPerScan;
                 _useLocalAuthorReference = dlg.UseLocalReference;
                 _useEhentaiLookup = dlg.UseEhentai;
-                _useNhentaiLookup = dlg.UseNhentai;
-                _nhentaiApiKey = dlg.NhentaiApiKey;
+
 
                 _settingsStore.UpdateOnlineAuthorSettings(
                     _onlineAuthorLookupEnabled,
@@ -2709,9 +2693,7 @@ namespace MangaAuthorSorter
                     _saveOnlineAuthorCache,
                     _maxOnlineLookupsPerScan,
                     _useLocalAuthorReference,
-                    _useEhentaiLookup,
-                    _useNhentaiLookup,
-                    _nhentaiApiKey);
+                    _useEhentaiLookup);
 
                 if (_lblStatus != null)
                 {
@@ -2719,7 +2701,8 @@ namespace MangaAuthorSorter
                         ? LF("Status.OnlineAuthorEnabled", L("Dialog.OnlineAuthor.ChainName"), _maxOnlineLookupsPerScan)
                         : L("Status.OnlineAuthorDisabled");
                 }
-            }
+            };
+            dlg.Show(this);
         }
 
         private void ShowAuthorEntityLibrary()
@@ -2727,7 +2710,8 @@ namespace MangaAuthorSorter
             if (_authorEntityLibraryForm != null &&
                 !_authorEntityLibraryForm.IsDisposed)
             {
-                if (!_authorEntityLibraryForm.Visible) _authorEntityLibraryForm.Show();
+                if (_authorEntityLibraryForm.WindowState == FormWindowState.Minimized) _authorEntityLibraryForm.WindowState = FormWindowState.Normal;
+                if (!_authorEntityLibraryForm.Visible) _authorEntityLibraryForm.Show(this);
                 _authorEntityLibraryForm.BringToFront();
                 _authorEntityLibraryForm.Activate();
                 return;
@@ -2738,9 +2722,8 @@ namespace MangaAuthorSorter
                 _language,
                 Font);
             _authorEntityLibraryForm.FormClosed += delegate { _authorEntityLibraryForm = null; };
-            // Keep the library independent from the modal settings dialog so it
-            // remains visible after settings closes and can follow later scans.
-            _authorEntityLibraryForm.Show();
+            // Management windows share the main owner without blocking the home page.
+            _authorEntityLibraryForm.Show(this);
         }
 
         private void ShowAuthorReferenceLibrary()
@@ -2753,7 +2736,7 @@ namespace MangaAuthorSorter
             }
             _authorReferenceLibraryForm = new AuthorReferenceLibraryForm(_language, Font);
             _authorReferenceLibraryForm.FormClosed += delegate { _authorReferenceLibraryForm = null; };
-            _authorReferenceLibraryForm.Show();
+            _authorReferenceLibraryForm.Show(this);
         }
 
         private void OpenFolderFromTextBox(TextBox box, string displayName)
@@ -3445,49 +3428,6 @@ namespace MangaAuthorSorter
             }
         }
 
-        private string GetDetailCandidateSummary(PlanItem item)
-        {
-            if (item == null)
-                return "";
-
-            List<string> names = new List<string>();
-            for (int i = 0; i < item.CandidateNames.Count; i++)
-            {
-                string name = (item.CandidateNames[i] ?? "").Trim();
-                if (name.Length > 0 &&
-                    !names.Contains(name, StringComparer.CurrentCultureIgnoreCase))
-                {
-                    names.Add(name);
-                }
-            }
-
-            if (names.Count == 0)
-            {
-                for (int i = 0; i < item.CandidatePaths.Count; i++)
-                {
-                    string path = item.CandidatePaths[i] ?? "";
-                    if (path.Length == 0)
-                        continue;
-                    try
-                    {
-                        string name = new DirectoryInfo(path).Name;
-                        if (name.Length > 0 &&
-                            !names.Contains(name, StringComparer.CurrentCultureIgnoreCase))
-                            names.Add(name);
-                    }
-                    catch { }
-                }
-            }
-
-            if (names.Count == 0)
-                return "";
-
-            int show = Math.Min(3, names.Count);
-            string text = String.Join(" / ", names.Take(show).ToArray());
-            if (names.Count > show)
-                text += " …";
-            return LF("Details.Candidates", text);
-        }
 
         private void UpdateDetailsFromSelection()
         {
@@ -3810,57 +3750,6 @@ namespace MangaAuthorSorter
             return "";
         }
 
-        private void BuildRecognitionLegend()
-        {
-            FlowLayoutPanel panel =
-                new FlowLayoutPanel();
-
-            panel.Location =
-                new Point(15, 247);
-            panel.Size =
-                new Size(1345, 24);
-            panel.Anchor =
-                AnchorStyles.Top |
-                AnchorStyles.Left |
-                AnchorStyles.Right;
-            panel.WrapContents = false;
-            panel.AutoScroll = false;
-            panel.Margin = new Padding(0);
-            panel.Padding = new Padding(0);
-
-            foreach (
-                RecognitionLegendItem item
-                in RecognitionVisualResolver.GetLegendItems())
-            {
-                Label mark =
-                    new Label();
-
-                mark.Text = item.Mark;
-                mark.AutoSize = true;
-                mark.ForeColor = item.Color;
-                mark.Font =
-                    new Font(
-                        "Segoe UI Symbol",
-                        9F,
-                        FontStyle.Bold);
-                mark.Margin =
-                    new Padding(0, 2, 2, 0);
-
-                Label name =
-                    new Label();
-
-                name.Text = GetRecognitionNameByMark(item.Mark);
-                name.AutoSize = true;
-                name.ForeColor = Color.Black;
-                name.Margin =
-                    new Padding(0, 2, 12, 0);
-
-                panel.Controls.Add(mark);
-                panel.Controls.Add(name);
-            }
-
-            Controls.Add(panel);
-        }
 
         private void BuildExecutionProgress()
         {
@@ -4148,6 +4037,14 @@ namespace MangaAuthorSorter
 
         private void BuildGrid()
         {
+            long start = _startupTrace.Now;
+            try { BuildGridCore(); }
+            finally { _startupTrace.Interval("Grid", start); }
+        }
+
+        private void BuildGridCore()
+        {
+            long gridPhase = _startupTrace.Now;
             _grid = new FastDataGridView();
             if (_gridStatusBoldFont == null)
                 _gridStatusBoldFont = new Font(Font, FontStyle.Bold);
@@ -4187,6 +4084,7 @@ namespace MangaAuthorSorter
             _grid.ColumnHeadersDefaultCellStyle.Font = new Font(Font, FontStyle.Regular);
             _grid.ClipboardCopyMode = DataGridViewClipboardCopyMode.EnableWithoutHeaderText;
             _grid.VirtualMode = true;
+            _startupTrace.Interval("GridStyles", gridPhase); gridPhase = _startupTrace.Now;
 
             AddGridColumn("FileName", L("Grid.FileName"), 320);
             AddGridColumn("Author", L("Grid.Author"), 155);
@@ -4203,6 +4101,7 @@ namespace MangaAuthorSorter
             foreach (DataGridViewColumn column in _grid.Columns)
                 column.Resizable = DataGridViewTriState.True;
 
+            _startupTrace.Interval("GridColumns", gridPhase); gridPhase = _startupTrace.Now;
             _gridContextMenu = new ContextMenuStrip();
             _gridContextMenu.ShowImageMargin = false;
             _openFileLocationMenuItem = new ToolStripMenuItem(L("Context.OpenFileLocation"));
@@ -4232,6 +4131,15 @@ namespace MangaAuthorSorter
             _gridContextMenu.Items.Add(_blockMenuItem);
             UiStyle.StyleMenu(_gridContextMenu);
 
+            _grid.Paint += delegate
+            {
+                _startupTrace.Point("FirstGridPaint");
+                if (_startupCacheApplied && !_startupResponsive && IsHandleCreated && !IsDisposed && !Disposing)
+                {
+                    _startupTrace.Point("CacheGridPaint");
+                    BeginInvoke(new Action(MarkStartupResponsive));
+                }
+            };
             _grid.CellDoubleClick += GridCellDoubleClick;
             _grid.CellClick += GridCellClick;
             _grid.CellMouseMove += GridCellMouseMove;
@@ -4250,6 +4158,7 @@ namespace MangaAuthorSorter
             _grid.ColumnWidthChanged += delegate { CloseOverlay(true); };
 
             _workspaceSplit.Panel1.Controls.Add(_grid);
+            _startupTrace.Interval("GridEvents", gridPhase);
         }
 
         private void AddGridColumn(string name, string header, int width)
@@ -4277,8 +4186,7 @@ namespace MangaAuthorSorter
             _grid.Columns.Add(col);
         }
 
-        private Label NewLabel(string text, int x, int y)
-        { Label l = new Label(); l.Text = T(text); l.Location = new Point(x, y); l.AutoSize = true; return l; }
+
         private Button NewButton(string text, int x, int y, int w, int h)
         { Button b = new Button(); b.Text = T(text); b.Location = new Point(x, y); b.Size = new Size(w, h); return b; }
 
@@ -4454,14 +4362,15 @@ namespace MangaAuthorSorter
             ScanWarmupRequest request = BuildWarmupRequest(
                 _txtSource.Text.Trim(), _txtRoot.Text.Trim(),
                 _chkRecursive != null && _chkRecursive.Checked,
-                _scanExtensions);
+                _scanExtensions, false, false);
             if (!Directory.Exists(request.Source) || !Directory.Exists(request.Target))
                 return;
             _scanWarmup.Start(request);
         }
 
         private ScanWarmupRequest BuildWarmupRequest(
-            string source, string target, bool recursive, IEnumerable<string> extensions)
+            string source, string target, bool recursive, IEnumerable<string> extensions,
+            bool prepareTargetVersion = true, bool prepareIdentityDependency = true)
         {
             ScanWarmupRequest request = new ScanWarmupRequest();
             request.Source = source;
@@ -4480,17 +4389,20 @@ namespace MangaAuthorSorter
                 GetCacheFileVersion(AppFiles.ScanExclusionRules) + "|" +
                 GetCacheFileVersion(AppFiles.FileTypeProfiles) + "|Everything=" +
                 ScanPerformanceDiagnostics.EverythingEnabled;
+            string tagCleaningVersion = GetCacheFileVersion(AppFiles.TagCleaningRules);
+            if (_parsedMetadataCache != null) _parsedMetadataCache.UpdateTagCleaningVersion(tagCleaningVersion);
             request.RecognitionVersion = "Alias=" +
                 GetCacheFileVersion(AppFiles.AuthorAliases) + "|Entity=" +
                 GetCacheFileVersion(AppFiles.AuthorEntities) + "|Tag=" +
-                GetCacheFileVersion(AppFiles.TagCleaningRules) + "|Recognition=" +
+                tagCleaningVersion + "|Recognition=" +
                 _recognitionMode.ToString() + "|Public=" + _authorEntityStore.PublicDatabaseVersion + "|Session=" + _authorEntityStore.IdentityRevision;
-            request.PersistentRecognitionVersion = "AuthorDependencies=1|RecognitionRules=4|Tag=" +
-                GetCacheFileVersion(AppFiles.TagCleaningRules) + "|Recognition=" + _recognitionMode +
+            request.PersistentRecognitionVersion = "AuthorDependencies=1|RecognitionRules=5|Tag=" +
+                tagCleaningVersion + "|Recognition=" + _recognitionMode +
                 "|Public=" + _authorEntityStore.PublicDatabaseVersion;
-            request.IdentityDependency = _engine.CreateIdentityDependencyResolver();
-            if (_recognitionFactCache != null)
+            if (prepareIdentityDependency) request.IdentityDependency = _engine.CreateIdentityDependencyResolver();
+            if (_recognitionFactCache != null && prepareIdentityDependency)
             {
+                _recognitionFactCache.UpdateRuleVersion("RecognitionRules=6|Mode=" + _recognitionMode + "|Tag=" + tagCleaningVersion);
                 _recognitionFactCache.UpdateIdentityVersions(
                     GetCacheFileVersion(AppFiles.AuthorAliases), GetCacheFileVersion(AppFiles.AuthorEntities));
                 _recognitionFactCache.UpdateIdentityDependencies(request.IdentityDependency, _authorEntityStore.PublicDatabaseVersion);
@@ -4499,11 +4411,14 @@ namespace MangaAuthorSorter
                 _fileSystemProvider as IFileSystemSnapshotVersionProvider;
             if (sourceVersionProvider != null)
             {
-                request.SourceSnapshotRevision = sourceVersionProvider.SnapshotRevision;
+                IFileSystemScopedSnapshotVersionProvider scoped = _fileSystemProvider as IFileSystemScopedSnapshotVersionProvider;
+                request.SourceSnapshotRevision = scoped != null
+                    ? scoped.GetSnapshotRevision(source, recursive, request.BlockedPaths, request.Extensions)
+                    : sourceVersionProvider.SnapshotRevision;
                 request.SourceVersion += "|SourceRevision=" +
-                    sourceVersionProvider.SnapshotRevision.ToString();
+                    request.SourceSnapshotRevision.ToString();
             }
-            request.TargetVersion = _destinationIndexCache != null
+            request.TargetVersion = !prepareTargetVersion ? "" : _destinationIndexCache != null
                 ? _destinationIndexCache.GetCurrentVersion(target)
                 : GetDirectoryVersion(target);
             return request;
@@ -4623,10 +4538,128 @@ namespace MangaAuthorSorter
             }
         }
 
+        private void RememberScanSettings()
+        {
+            if (_loadingStartupSettings || _numScanLimit == null || _chkRecursive == null || _cmbScanMode == null) return;
+            _settingsStore.UpdateScanSettings(Decimal.ToInt32(_numScanLimit.Value), _chkRecursive.Checked, _cmbScanMode.SelectedIndex);
+            if (!_hasCompletedScanSession || _isScanning || _isExecuting) return;
+            int limit = Decimal.ToInt32(_numScanLimit.Value);
+            bool needsMore = _lastCompletedRequestedLimit > 0 && (limit == 0 || limit > _lastCompletedRequestedLimit);
+            if (!needsMore && _chkRecursive.Checked == _lastCompletedRecursive) return;
+            if (_scanSettingsRefreshTimer == null)
+            {
+                _scanSettingsRefreshTimer = new System.Windows.Forms.Timer { Interval = 350 };
+                _scanSettingsRefreshTimer.Tick += delegate
+                {
+                    _scanSettingsRefreshTimer.Stop();
+                    if (!IsDisposed && !_isScanning && !_isExecuting && HasValidScanPaths()) ScanPreview();
+                };
+                Disposed += delegate { _scanSettingsRefreshTimer.Dispose(); };
+            }
+            _scanSettingsRefreshTimer.Stop();
+            _scanSettingsRefreshTimer.Start();
+        }
+
+        private async void RestorePreviousScanAsync()
+        {
+            if (!_fileIndexCacheReady || _isScanning || _isExecuting) return;
+            string source = _txtSource.Text.Trim();
+            string target = _txtRoot.Text.Trim();
+            if (String.IsNullOrWhiteSpace(source) || String.IsNullOrWhiteSpace(target)) return;
+            try
+            {
+                Stopwatch restoreTimer = Stopwatch.StartNew();
+                // Restoration does not need a target tree fingerprint. Identity
+                // index preparation belongs on the worker, before reading plans.
+                long prepareStart = _startupTrace.Now;
+                ScanWarmupRequest request = BuildWarmupRequest(source, target, _chkRecursive.Checked, _scanExtensions, false, false);
+                _startupTrace.Interval("RestoreContext", prepareStart);
+                long restoreReadStart = _startupTrace.Now;
+                long workerStart = 0, workerEnd = 0, identityTicks = 0, sqlTicks = 0;
+                List<PlanItem> restored = await Task.Run(delegate
+                {
+                    workerStart = _startupTrace.Now;
+                    request.IdentityDependency = _engine.CreateIdentityDependencyResolver();
+                    long sqlStart = _startupTrace.Now; identityTicks = sqlStart - workerStart;
+                    ScanSessionSnapshot session = _fileIndexCache.LoadDisplayedSession();
+                    List<PlanItem> items = session == null ? null : _fileIndexCache.LoadMigrationPlans(request.PersistentPlanKey,
+                        session, request.IdentityDependency);
+                    workerEnd = _startupTrace.Now; sqlTicks = workerEnd - sqlStart;
+                    return items;
+                });
+                _startupTrace.Interval("RestoreReadAwait", restoreReadStart);
+                _startupTrace.Duration("RestoreIdentity", identityTicks);
+                _startupTrace.Duration("RestoreSql", sqlTicks);
+                _startupTrace.PointAt("RestoreWorkerStart", workerStart);
+                _startupTrace.PointAt("RestoreWorkerEnd", workerEnd);
+                // A user can start a scan or change paths while SQLite is loading.
+                if (IsDisposed || Disposing || _isScanning || _isExecuting || _hasCompletedScanSession ||
+                    source != _txtSource.Text.Trim() || target != _txtRoot.Text.Trim()) return;
+                if (request.Recursive != _chkRecursive.Checked || request.RequestedLimit != Decimal.ToInt32(_numScanLimit.Value) ||
+                    request.Mode != GetSelectedScanMode()) return;
+                if (restored == null) return;
+                restored = restored.Where(delegate(PlanItem item)
+                {
+                    return FileTypeRules.ContainsExtension(request.Extensions, item.SourcePath) &&
+                        (request.Recursive || PathsEqual(Path.GetDirectoryName(item.SourcePath), source));
+                }).ToList();
+                if (restored.Count > 0)
+                {
+                    _plan = restored;
+                    _currentSourceRoot = source;
+                    _currentRoot = target;
+                    _currentMaxAuthors = Decimal.ToInt32(_numMax.Value);
+                    _currentScanMode = GetSelectedScanMode();
+                    _restoredPlanNeedsValidation = true;
+                    long applyStart = _startupTrace.Now;
+                    _startupApplyingCache = true;
+                    try { ApplyPlanTargetConflictMarks(_plan); RenderGrid(null); }
+                    finally { _startupApplyingCache = false; _startupTrace.Interval("RestoreApply", applyStart); }
+                    _startupCacheApplied = true;
+                    _startupTrace.Point("CacheApplied");
+                    restoreTimer.Stop();
+                    _startupRestoreMs = restoreTimer.ElapsedMilliseconds;
+                    _startupInteractiveMs = _startupClock.ElapsedMilliseconds;
+                    _lblStatus.Text = LF("Status.StartupRestoredElapsed", _startupRestoreMs);
+                    _btnExecute.Enabled = false;
+                }
+                // The normal worker reconciles the disk index and reuses valid
+                // per-file facts/plans. It never executes a migration.
+                if (Directory.Exists(source) && Directory.Exists(target))
+                {
+                    if (_startupValidationTiming == StartupValidationTiming.Immediate || !_startupCacheApplied)
+                    {
+                        if (_startupValidationTiming != StartupValidationTiming.DisabledForExperiment)
+                            BeginInvoke(new Action(StartStartupValidation));
+                    }
+                    // B waits for a painted cache and a subsequent UI message.
+                    // C is internal to the isolated test harness only.
+                }
+                else if (restored.Count > 0)
+                    _lblStatus.Text = L("Status.RestoredSourceUnavailable");
+            }
+            catch
+            {
+                if (!IsDisposed && !Disposing) _lblStatus.Text = L("Status.RestoreUnavailable");
+            }
+        }
+
         private void LoadPersistentPaths()
+        {
+            long start = _startupTrace.Now;
+            try { LoadPersistentPathsCore(); }
+            finally { _startupTrace.Interval("SavedSettings", start); }
+        }
+
+        private void LoadPersistentPathsCore()
         {
             UserSettingsData data =
                 _settingsStore.Load();
+            _numScanLimit.Value = data.ScanLimit;
+            _chkRecursive.Checked = data.ScanRecursive;
+            _cmbScanMode.SelectedIndex = data.ScanMode;
+            _viewFilter = UserSettingsStore.NormalizeListViewFilter(data.ListViewFilter);
+            UpdateViewFilterButtonStyles();
 
             if (!String.IsNullOrWhiteSpace(
                     data.SourcePath))
@@ -4649,8 +4682,7 @@ namespace MangaAuthorSorter
             _maxOnlineLookupsPerScan = data.MaxOnlineLookupsPerScan;
             _useLocalAuthorReference = data.UseLocalAuthorReference;
             _useEhentaiLookup = data.UseEhentaiLookup;
-            _useNhentaiLookup = data.UseNhentaiLookup;
-            _nhentaiApiKey = data.NhentaiApiKey;
+
             _recognitionMode = data.RecognitionMode;
             _engine.RecognitionMode = _recognitionMode;
             UpdateRecognitionModeMenu();
@@ -4692,6 +4724,7 @@ namespace MangaAuthorSorter
 
         private void SavePersistentPaths()
         {
+            RememberScanSettings();
             UserSettingsData data =
                 _settingsStore.UpdateSettings(
                     _txtSource.Text.Trim(),
@@ -4784,108 +4817,9 @@ namespace MangaAuthorSorter
             }
         }
 
-        private List<PlanItem> GetModeMatchedPlan(
-            List<FileInfo> searchedFiles,
-            string root,
-            int maxAuthors,
-            ScanModeKind mode,
-            int requestedLimit,
-            out int classifiedCount,
-            out int matchedCount)
-        {
-            classifiedCount = searchedFiles.Count;
 
-            List<PlanItem> classifiedPlan =
-                _engine.BuildPlan(
-                    searchedFiles,
-                    root,
-                    maxAuthors,
-                    _currentGroupTemplate,
-                    _recognizedGroupTemplates,
-                    _currentAuthorFolderTemplate,
-                    _recognizedAuthorFolderTemplates);
 
-            if (mode == ScanModeKind.Global)
-            {
-                matchedCount = classifiedPlan.Count;
-                return classifiedPlan;
-            }
-
-            // Classification is decided against the complete candidate set.
-            // The filtered list must keep that decision; otherwise rebuilding
-            // only the filtered files can remove the very context that made an
-            // item ambiguous (or change a new-author relationship).
-            List<PlanItem> matchedPlan =
-                classifiedPlan.Where(
-                    delegate(PlanItem p)
-                    {
-                        return ScanModeRules.Matches(p, mode);
-                    })
-                .ToList();
-
-            matchedCount = matchedPlan.Count;
-
-            if (requestedLimit > 0 &&
-                matchedPlan.Count > requestedLimit)
-            {
-                matchedPlan = matchedPlan.Take(requestedLimit).ToList();
-            }
-
-            return matchedPlan;
-        }
-
-        private static void PreserveFilteredClassification(
-            PlanItem rebuilt,
-            PlanItem classified)
-        {
-            if (rebuilt == null || classified == null)
-                return;
-
-            rebuilt.Author = classified.Author ?? "";
-            rebuilt.MatchedAs = classified.MatchedAs ?? "";
-            rebuilt.MatchWhy = classified.MatchWhy ?? "";
-            rebuilt.StatusCode = classified.StatusCode;
-            rebuilt.EvidenceKind = classified.EvidenceKind;
-            rebuilt.StatusArgument = classified.StatusArgument ?? "";
-            rebuilt.RecognitionScore = classified.RecognitionScore;
-            rebuilt.RecognitionRunnerUpScore = classified.RecognitionRunnerUpScore;
-
-            rebuilt.CandidatePaths.Clear();
-            rebuilt.CandidateNames.Clear();
-            rebuilt.CandidateIsPlanned.Clear();
-            foreach (string path in classified.CandidatePaths)
-                rebuilt.CandidatePaths.Add(path);
-            foreach (string name in classified.CandidateNames)
-                rebuilt.CandidateNames.Add(name);
-            foreach (bool isPlanned in classified.CandidateIsPlanned)
-                rebuilt.CandidateIsPlanned.Add(isPlanned);
-
-            RecognitionVisual originalVisual =
-                RecognitionVisualResolver.Resolve(classified);
-            string code = originalVisual != null
-                ? (originalVisual.Code ?? "").ToLowerInvariant()
-                : "";
-
-            if (code == "ambiguous" || code == "unrecognized")
-            {
-                rebuilt.Status = classified.Status ?? "";
-                rebuilt.CanMove = false;
-                rebuilt.TargetDir = "";
-                rebuilt.TargetPath = "";
-                return;
-            }
-
-            // New/new-reuse is also a classification result. Preserve the
-            // label while retaining the rebuilt target path and move-safety
-            // checks from the selected-only planning pass.
-            if ((code == "new" || code == "new-reuse") &&
-                rebuilt.CanMove)
-            {
-                rebuilt.Status = classified.Status ?? rebuilt.Status;
-            }
-        }
-
-        private void ScanPreview()
+        private void ScanPreview(bool startupValidation = false)
         {
             if (_isScanning)
             {
@@ -5014,41 +4948,15 @@ namespace MangaAuthorSorter
             request.MaxOnlineLookups = _maxOnlineLookupsPerScan;
             request.UseLocalReference = _useLocalAuthorReference;
             request.UseEhentai = _useEhentaiLookup;
-            request.UseNhentai = _useNhentaiLookup;
-            request.NhentaiApiKey = _nhentaiApiKey;
+
             request.WarmupRequest = BuildWarmupRequest(
                 source, root, request.Recursive, request.Extensions);
-
-            // An unchanged explicit scan is a view refresh, not a new scan.
-            // Program-owned moves/renames update the current plan and indexes
-            // directly, so re-entering the background pipeline would only make
-            // a cache hit look like another full scan to the user.
-            if (_hasCompletedScanSession &&
-                String.Equals(_lastCompletedSourceKey,
-                    request.WarmupRequest.SourceKey, StringComparison.Ordinal) &&
-                String.Equals(_lastCompletedPlanKey,
-                    request.WarmupRequest.PlanKey, StringComparison.Ordinal) &&
-                String.Equals(_lastCompletedTargetVersion,
-                    request.WarmupRequest.TargetVersion, StringComparison.Ordinal) &&
-                _lastCompletedRequestedLimit == request.RequestedLimit)
-            {
-                ApplyCurrentGridFilter(null);
-                RenderGrid(null);
-                if (_progressBar != null) _progressBar.Value = 100;
-                if (_lblProgressFile != null)
-                    _lblProgressFile.Text = L("SearchDetail.SourceIndexHit");
-                if (_lblProgressPath != null) _lblProgressPath.Text = "";
-                if (_lblStatus != null)
-                    _lblStatus.Text = L("SearchDetail.SourceIndexHit");
-                RefreshExecutionSafetyUi();
-                return;
-            }
 
             _scanCancelRequested = false;
             _scanResponseTimer = Stopwatch.StartNew();
             ResetScanProgress();
             SetScanUiState(true);
-            _lblStatus.Text = L("Status.ScanRunning");
+            _lblStatus.Text = L(_restoredPlanNeedsValidation ? "Status.RestoredPreviousScan" : "Status.ScanRunning");
 
             BackgroundWorker worker =
                 new BackgroundWorker();
@@ -5100,282 +5008,312 @@ namespace MangaAuthorSorter
                         e.Cancelled || _scanCancelRequested;
                     _scanCancelRequested = false;
                     _scanWorker = null;
-                    SetScanUiState(false);
-
-                    if (_progressBar != null)
+                    bool rescanRequired = false;
+                    try
                     {
-                        _progressBar.Style = ProgressBarStyle.Continuous;
-                        _progressBar.MarqueeAnimationSpeed = 0;
-                    }
+                        if (_closeAfterScanCancellation) return;
 
-                    if (canceled)
-                    {
-                        if (_authorEntityLibraryForm != null && !_authorEntityLibraryForm.IsDisposed)
-                            _authorEntityLibraryForm.MarkOnlineProgressCanceled();
-                        if (_scanResponseTimer != null) { _scanResponseTimer.Stop(); _scanResponseTimer = null; }
                         if (_progressBar != null)
-                            _progressBar.Value = 0;
-                        _lblProgressFile.Text =
-                            L("Status.ScanCanceled");
-                        _lblProgressPath.Text = "";
-                        _lblStatus.Text =
-                            L("Status.ScanCanceledKeepPreview");
-                        RefreshExecutionSafetyUi();
-                        UpdateScanExcludedLink();
-                        return;
-                    }
-
-                    if (e.Error != null)
-                    {
-                        if (_scanResponseTimer != null) { _scanResponseTimer.Stop(); _scanResponseTimer = null; }
-                        if (_progressBar != null)
-                            _progressBar.Value = 0;
-                        _lblProgressFile.Text =
-                            L("Status.ScanFailed");
-                        _lblProgressPath.Text =
-                            e.Error.Message;
-                        _lblStatus.Text =
-                            LF("Status.ScanFailedDetail", e.Error.Message);
-
-                        RefreshExecutionSafetyUi();
-                        UpdateScanExcludedLink();
-
-                        UiMessageBox.Show(
-                            this,
-                            e.Error.Message,
-                            L("Status.ScanFailed"),
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Error);
-                        return;
-                    }
-
-                    ScanRunResult result =
-                        e.Result as ScanRunResult;
-                    if (result == null)
-                    {
-                        if (_scanResponseTimer != null) { _scanResponseTimer.Stop(); _scanResponseTimer = null; }
-                        _lblStatus.Text =
-                            L("Status.ScanFailed");
-                        RefreshExecutionSafetyUi();
-                        UpdateScanExcludedLink();
-                        return;
-                    }
-
-                    Stopwatch finalizeTimer = Stopwatch.StartNew();
-                    if (ScanPerformanceDiagnostics.WarmupEnabled)
-                    {
-                        ScanWarmupRequest completedRequest = BuildWarmupRequest(
-                            request.Source,
-                            request.Root,
-                            request.Recursive,
-                            request.Extensions);
-                        if (completedRequest.SourceSnapshotRevision ==
-                                request.WarmupRequest.SourceSnapshotRevision &&
-                            String.Equals(
-                                completedRequest.TargetVersion,
-                                request.WarmupRequest.TargetVersion,
-                                StringComparison.Ordinal))
                         {
-                            _scanWarmup.StorePreparedPlan(
-                                completedRequest,
-                                result.Plan,
-                                result.RecognitionPlanMs);
+                            _progressBar.Style = ProgressBarStyle.Continuous;
+                            _progressBar.MarqueeAnimationSpeed = 0;
                         }
-                    }
-                    if (_fileIndexCacheReady && result.Search != null &&
-                        result.Search.ScanSession != null &&
-                        result.RecalculatedPlan != null &&
-                        FileIndexCacheDatabase.HasNewMigrationPlans(result.RecalculatedPlan))
-                    {
-                        try
+
+                        if (canceled)
                         {
-                            ScanWarmupRequest cacheRequest = BuildWarmupRequest(
+                            if (_authorEntityLibraryForm != null && !_authorEntityLibraryForm.IsDisposed)
+                                _authorEntityLibraryForm.MarkOnlineProgressCanceled();
+                            if (_scanResponseTimer != null) { _scanResponseTimer.Stop(); _scanResponseTimer = null; }
+                            if (_progressBar != null)
+                                _progressBar.Value = 0;
+                            _lblProgressFile.Text =
+                                L("Status.ScanCanceled");
+                            _lblProgressPath.Text = "";
+                            _lblStatus.Text =
+                                L("Status.ScanCanceledKeepPreview");
+                            RefreshExecutionSafetyUi();
+                            UpdateScanExcludedLink();
+                            return;
+                        }
+
+                        if (e.Error != null)
+                        {
+                            if (_scanResponseTimer != null) { _scanResponseTimer.Stop(); _scanResponseTimer = null; }
+                            if (_progressBar != null)
+                                _progressBar.Value = 0;
+                            _lblProgressFile.Text =
+                                L("Status.ScanFailed");
+                            _lblProgressPath.Text =
+                                e.Error.Message;
+                            _lblStatus.Text =
+                                LF("Status.ScanFailedDetail", e.Error.Message);
+
+                            RefreshExecutionSafetyUi();
+                            UpdateScanExcludedLink();
+
+                            UiMessageBox.Show(
+                                this,
+                                e.Error.Message,
+                                L("Status.ScanFailed"),
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error);
+                            return;
+                        }
+
+                        ScanRunResult result =
+                            e.Result as ScanRunResult;
+                        if (result == null)
+                        {
+                            if (_scanResponseTimer != null) { _scanResponseTimer.Stop(); _scanResponseTimer = null; }
+                            _lblStatus.Text =
+                                L("Status.ScanFailed");
+                            RefreshExecutionSafetyUi();
+                            UpdateScanExcludedLink();
+                            return;
+                        }
+
+                        Stopwatch finalizeTimer = Stopwatch.StartNew();
+                        if (ScanPerformanceDiagnostics.WarmupEnabled)
+                        {
+                            ScanWarmupRequest completedRequest = BuildWarmupRequest(
                                 request.Source,
                                 request.Root,
                                 request.Recursive,
                                 request.Extensions);
-                            // A full cache hit must be read-only. On a partial
-                            // hit persist only freshly computed rows; re-writing
-                            // thousands of untouched rows defeats the index.
-                            if (result.RecalculatedPlan != null &&
-                                result.RecalculatedPlan.Count > 0)
+                            if (!String.Equals(completedRequest.SourceKey, request.WarmupRequest.SourceKey, StringComparison.Ordinal) ||
+                                !String.Equals(completedRequest.PlanKey, request.WarmupRequest.PlanKey, StringComparison.Ordinal) ||
+                                !String.Equals(completedRequest.TargetVersion, request.WarmupRequest.TargetVersion, StringComparison.Ordinal))
                             {
-                                Stopwatch planWriteTimer = Stopwatch.StartNew();
-                                try
-                                {
-                                    _fileIndexCache.UpsertMigrationPlans(
-                                        cacheRequest.PersistentPlanKey,
-                                        result.RecalculatedPlan, cacheRequest.IdentityDependency);
-                                }
-                                finally
-                                {
-                                    planWriteTimer.Stop();
-                                    result.PlanCacheWriteMs = planWriteTimer.ElapsedMilliseconds;
-                                }
+                                // A file event or modeless rule edit superseded
+                                // this result. Keep the visible list and validate
+                                // the newest context before publishing any rows.
+                                _restoredPlanNeedsValidation = true;
+                                rescanRequired = true;
+                                return;
+                            }
+                            if (completedRequest.SourceSnapshotRevision ==
+                                    request.WarmupRequest.SourceSnapshotRevision &&
+                                String.Equals(
+                                    completedRequest.TargetVersion,
+                                    request.WarmupRequest.TargetVersion,
+                                    StringComparison.Ordinal))
+                            {
+                                _scanWarmup.StorePreparedPlan(
+                                    completedRequest,
+                                    result.Plan,
+                                    result.RecognitionPlanMs);
                             }
                         }
-                        catch
+                        List<PlanItem> previousPlan = _plan;
+                        _plan = result.Plan ?? new List<PlanItem>();
+                        if (previousPlan != null)
                         {
-                            // A plan-cache write is an optimization; the visible
-                            // scan result remains authoritative for this session.
-                        }
-                    }
-
-                    _plan = result.Plan ?? new List<PlanItem>();
-                    _hasCompletedScanSession = true;
-                    _lastCompletedSourceKey = request.WarmupRequest.SourceKey;
-                    _lastCompletedPlanKey = request.WarmupRequest.PlanKey;
-                    _lastCompletedTargetVersion = request.WarmupRequest.TargetVersion;
-                    _lastCompletedRequestedLimit = request.RequestedLimit;
-                    ApplyPlanTargetConflictMarks(_plan);
-                    _lastScanExcludedItems =
-                        result.Search != null && result.Search.ExcludedItems != null
-                            ? new List<ScanExcludedItem>(result.Search.ExcludedItems)
-                            : new List<ScanExcludedItem>();
-                    UpdateScanExcludedLink();
-
-                    _lblProgressFile.Text =
-                        L("Status.ScanUpdatingPreview");
-                    _lblProgressPath.Text = "";
-                    if (_progressBar != null)
-                        _progressBar.Value = 100;
-
-                    finalizeTimer.Stop();
-                    result.FinalizeMs = Math.Max(0,
-                        finalizeTimer.ElapsedMilliseconds - result.PlanCacheWriteMs);
-                    GridRenderMetrics gridMetrics = RenderGrid(null);
-                    if (_scanResponseTimer != null)
-                    {
-                        _scanResponseTimer.Stop();
-                        result.ElapsedMilliseconds = _scanResponseTimer.ElapsedMilliseconds;
-                        _scanResponseTimer = null;
-                    }
-
-                    if (result.WarmupMetrics != null && ScanPerformanceDiagnostics.Enabled)
-                    {
-                        ScanPerformanceDiagnostics.Record(new ScanPerformanceEntry
-                        {
-                            Time = DateTime.Now,
-                            WarmupEnabled = ScanPerformanceDiagnostics.WarmupEnabled,
-                            EverythingEnabled = ScanPerformanceDiagnostics.EverythingEnabled,
-                            Provider = result.WarmupMetrics.Provider,
-                            WarmupHit = result.WarmupMetrics.WarmupHit,
-                            ReadyBeforeRequest = result.WarmupMetrics.ReadyBeforeRequest,
-                            SnapshotHit = result.WarmupMetrics.SnapshotHit,
-                            WarmupWaitMs = result.WarmupMetrics.WarmupWaitMs,
-                            SnapshotPrepareMs = result.WarmupMetrics.SnapshotPrepareMs,
-                            FileDiscoveryMs = result.WarmupMetrics.FileDiscoveryMs,
-                            ProviderQueryMs = result.WarmupMetrics.ProviderQueryMs,
-                            IndexReconcileMs = result.WarmupMetrics.IndexReconcileMs,
-                            PlanCacheReadMs = result.PlanCacheReadMs,
-                            PlanCacheWriteMs = result.PlanCacheWriteMs,
-                            FinalizeMs = result.FinalizeMs,
-                            AuthorMatchMs = result.RecognitionPlanMs,
-                            IdentitySourceMs = result.PlanDiagnostics.IdentitySourceMs,
-                            TargetDirectoryMs = result.PlanDiagnostics.TargetDirectoryMs,
-                            InitialIndexMs = result.PlanDiagnostics.InitialIndexMs,
-                            InitialIndexBuilds = result.PlanDiagnostics.InitialBuilds,
-                            IncrementalIndexMs = result.PlanDiagnostics.IncrementalIndexMs,
-                            IncrementalIndexAdds = result.PlanDiagnostics.IncrementalAdds,
-                            PrepareRecognitionMs = result.PlanDiagnostics.PrepareRecognitionMs,
-                            PlanningLoopMs = result.PlanDiagnostics.PlanLoopMs,
-                            OnlineLookupMs = result.OnlineLookupMs,
-                            UniqueAuthors = result.PlanDiagnostics.UniqueAuthorCount,
-                            NewAuthorFolders = result.PlanDiagnostics.NewAuthorFolders,
-                            ParsedCacheHits = result.WarmupMetrics.ParsedCacheHits,
-                            ParsedCacheMisses = result.WarmupMetrics.ParsedCacheMisses,
-                            RecognitionCacheHits = result.WarmupMetrics.RecognitionCacheHits,
-                            RecognitionCacheMisses = result.WarmupMetrics.RecognitionCacheMisses,
-                            DestinationCacheHits = result.WarmupMetrics.DestinationCacheHits,
-                            DestinationCacheMisses = result.WarmupMetrics.DestinationCacheMisses,
-                            IndexCacheHits = result.WarmupMetrics.IndexCacheHits,
-                            IndexAdded = result.WarmupMetrics.IndexAdded,
-                            IndexRemoved = result.WarmupMetrics.IndexRemoved,
-                            IndexModified = result.WarmupMetrics.IndexModified,
-                            IndexMoved = result.WarmupMetrics.IndexMoved,
-                            IndexRenamed = result.WarmupMetrics.IndexRenamed,
-                            PlanCacheHits = result.WarmupMetrics.PlanCacheHits,
-                            RecalculatedFiles = result.WarmupMetrics.RecalculatedFiles,
-                            UiApplyMs = gridMetrics.TotalMs,
-                            TotalResponseMs = result.ElapsedMilliseconds,
-                            CandidateCount = result.CandidateCount,
-                            ResultCount = result.Plan.Count
-                        });
-                    }
-
-                    int movable =
-                        _plan.Count(
-                            delegate(PlanItem p)
+                            Dictionary<string, PlanItem> previousByPath = previousPlan
+                                .Where(p => p != null).ToDictionary(p => p.SourcePath, StringComparer.OrdinalIgnoreCase);
+                            for (int i = 0; i < _plan.Count; i++)
                             {
-                                return p.CanMove;
+                                PlanItem old;
+                                if (previousByPath.TryGetValue(_plan[i].SourcePath, out old) &&
+                                    SamePreviewItem(old, _plan[i])) _plan[i] = old;
+                            }
+                        }
+                        _restoredPlanNeedsValidation = false;
+                        if (_fileIndexCacheReady && result.Search != null)
+                        {
+                            try { _fileIndexCache.SaveDisplayedSession(result.Search.ScanSession); }
+                            catch { }
+                        }
+                        _hasCompletedScanSession = true;
+                        _lastCompletedSourceKey = request.WarmupRequest.SourceKey;
+                        _lastCompletedPlanKey = request.WarmupRequest.PlanKey;
+                        _lastCompletedTargetVersion = request.WarmupRequest.TargetVersion;
+                        _lastCompletedRequestedLimit = request.RequestedLimit;
+                        _lastCompletedRecursive = request.Recursive;
+                        ApplyPlanTargetConflictMarks(_plan);
+                        bool reusePlan = SamePreview(previousPlan, _plan);
+                        if (reusePlan) _plan = previousPlan;
+                        _lastScanExcludedItems =
+                            result.Search != null && result.Search.ExcludedItems != null
+                                ? new List<ScanExcludedItem>(result.Search.ExcludedItems)
+                                : new List<ScanExcludedItem>();
+                        bool reuseRestoredGrid = reusePlan && SamePreview(_allGridItems, GetPreviewItems().ToList());
+                        UpdateScanExcludedLink();
+
+                        _lblProgressFile.Text =
+                            L("Status.ScanUpdatingPreview");
+                        _lblProgressPath.Text = "";
+                        if (_progressBar != null)
+                            _progressBar.Value = 100;
+
+                        finalizeTimer.Stop();
+                        result.FinalizeMs = finalizeTimer.ElapsedMilliseconds;
+                        GridRenderMetrics gridMetrics = reuseRestoredGrid ? new GridRenderMetrics() :
+                            (previousPlan != null && previousPlan.Count > 0 ? RefreshValidatedGrid() : RenderGrid(null));
+                        if (reuseRestoredGrid) UpdateFilterCounts();
+                        if (_scanResponseTimer != null)
+                        {
+                            _scanResponseTimer.Stop();
+                            result.ElapsedMilliseconds = _scanResponseTimer.ElapsedMilliseconds;
+                            _scanResponseTimer = null;
+                        }
+
+                        if (result.WarmupMetrics != null && ScanPerformanceDiagnostics.Enabled)
+                        {
+                            ScanPerformanceDiagnostics.Record(new ScanPerformanceEntry
+                            {
+                                Time = DateTime.Now,
+                                StartupRestoreMs = startupValidation ? _startupRestoreMs : -1,
+                                BackgroundValidationMs = startupValidation ? result.ElapsedMilliseconds : -1,
+                                EverythingQueryCount = result.Search != null ? result.Search.EverythingQueryCount : 0,
+                                FirstInteractiveMs = startupValidation ? _startupInteractiveMs : -1,
+                                StartupWindowShownMs = startupValidation ? _startupWindowShownMs : -1,
+                                StartupInitializationStages = startupValidation ? String.Join(",", _startupInitializationStages) : "",
+                                StartupUiTrace = startupValidation ? _startupTrace.Export() : "",
+                                ActualRecognitions = result.PlanDiagnostics.RecognizedFiles.Count,
+                                SdkPrepareMs = result.Search != null ? result.Search.SdkPrepareMs : -1,
+                                EverythingWaitMs = result.Search != null ? result.Search.EverythingWaitMs : -1,
+                                EverythingReadMs = result.Search != null ? result.Search.EverythingReadMs : -1,
+                                DiscoveryCheckMs = result.Search != null ? result.Search.DiscoveryCheckMs : -1,
+                                DiscoverySetMs = result.Search != null ? result.Search.DiscoverySetMs : -1,
+                                DiscoveryEnumerateMs = result.Search != null ? result.Search.DiscoveryEnumerateMs : -1,
+                                DiscoveryCompareMs = result.Search != null ? result.Search.DiscoveryCompareMs : -1,
+                                WarmupEnabled = ScanPerformanceDiagnostics.WarmupEnabled,
+                                EverythingEnabled = ScanPerformanceDiagnostics.EverythingEnabled,
+                                Provider = result.WarmupMetrics.Provider,
+                                WarmupHit = result.WarmupMetrics.WarmupHit,
+                                ReadyBeforeRequest = result.WarmupMetrics.ReadyBeforeRequest,
+                                SnapshotHit = result.WarmupMetrics.SnapshotHit,
+                                WarmupWaitMs = result.WarmupMetrics.WarmupWaitMs,
+                                SnapshotPrepareMs = result.WarmupMetrics.SnapshotPrepareMs,
+                                FileDiscoveryMs = result.WarmupMetrics.FileDiscoveryMs,
+                                ProviderQueryMs = result.WarmupMetrics.ProviderQueryMs,
+                                IndexReconcileMs = result.WarmupMetrics.IndexReconcileMs,
+                                PlanCacheReadMs = result.PlanCacheReadMs,
+                                PlanCacheWriteMs = result.PlanCacheWriteMs,
+                                FinalizeMs = result.FinalizeMs,
+                                AuthorMatchMs = result.RecognitionPlanMs,
+                                IdentitySourceMs = result.PlanDiagnostics.IdentitySourceMs,
+                                TargetDirectoryMs = result.PlanDiagnostics.TargetDirectoryMs,
+                                InitialIndexMs = result.PlanDiagnostics.InitialIndexMs,
+                                InitialIndexBuilds = result.PlanDiagnostics.InitialBuilds,
+                                IncrementalIndexMs = result.PlanDiagnostics.IncrementalIndexMs,
+                                IncrementalIndexAdds = result.PlanDiagnostics.IncrementalAdds,
+                                PrepareRecognitionMs = result.PlanDiagnostics.PrepareRecognitionMs,
+                                PlanningLoopMs = result.PlanDiagnostics.PlanLoopMs,
+                                OnlineLookupMs = result.OnlineLookupMs,
+                                UniqueAuthors = result.PlanDiagnostics.UniqueAuthorCount,
+                                NewAuthorFolders = result.PlanDiagnostics.NewAuthorFolders,
+                                ParsedCacheHits = result.WarmupMetrics.ParsedCacheHits,
+                                ParsedCacheMisses = result.WarmupMetrics.ParsedCacheMisses,
+                                RecognitionCacheHits = result.WarmupMetrics.RecognitionCacheHits,
+                                RecognitionCacheMisses = result.WarmupMetrics.RecognitionCacheMisses,
+                                DestinationCacheHits = result.WarmupMetrics.DestinationCacheHits,
+                                DestinationCacheMisses = result.WarmupMetrics.DestinationCacheMisses,
+                                IndexCacheHits = result.WarmupMetrics.IndexCacheHits,
+                                IndexAdded = result.WarmupMetrics.IndexAdded,
+                                IndexRemoved = result.WarmupMetrics.IndexRemoved,
+                                IndexModified = result.WarmupMetrics.IndexModified,
+                                IndexMoved = result.WarmupMetrics.IndexMoved,
+                                IndexRenamed = result.WarmupMetrics.IndexRenamed,
+                                PlanCacheHits = result.WarmupMetrics.PlanCacheHits,
+                                RecalculatedFiles = result.WarmupMetrics.RecalculatedFiles,
+                                UiApplyMs = gridMetrics.TotalMs,
+                                TotalResponseMs = result.ElapsedMilliseconds,
+                                CandidateCount = result.CandidateCount,
+                                ResultCount = result.Plan.Count
                             });
+                        }
 
-                    int needsReview = CountUnresolvedItems();
-                    int deferred = CountDeferredItems();
+                        int movable =
+                            _plan.Count(
+                                delegate(PlanItem p)
+                                {
+                                    return p.CanMove;
+                                });
 
-                    RefreshExecutionSafetyUi();
+                        int needsReview = CountUnresolvedItems();
+                        int deferred = CountDeferredItems();
 
-                    if (result.Search != null &&
-                        result.Search.Backend == "Everything SDK")
-                    {
-                        SetEverythingStatus(L("Status.EverythingBackend"), Color.DarkGreen, "", "");
-                    }
-                    else if (!ScanPerformanceDiagnostics.EverythingEnabled)
-                        SetEverythingStatus(L("Status.EverythingDisabled"), Color.DarkOrange,
-                            L("Status.EverythingEnableInDiagnostics"), "diagnostics");
-                    else
-                        SetEverythingStatus(L("Status.EverythingNotRunning"), Color.DarkOrange,
-                            L("Status.EverythingDownloadRecommended"), "download");
+                        RefreshExecutionSafetyUi();
 
-                    int excludedCount = _lastScanExcludedItems != null
-                        ? _lastScanExcludedItems.Count
-                        : 0;
+                        if (result.Search != null &&
+                            result.Search.Backend == "Everything SDK")
+                        {
+                            SetEverythingStatus(L("Status.EverythingBackend"), Color.DarkGreen, "", "");
+                        }
+                        else if (ScanPerformanceDiagnostics.EverythingEnabled && _everything.IsEverythingRunning())
+                            SetEverythingStatus(L("Status.EverythingBackend"), Color.DarkGreen, "", "");
+                        else if (!ScanPerformanceDiagnostics.EverythingEnabled)
+                            SetEverythingStatus(L("Status.EverythingDisabled"), Color.DarkOrange,
+                                L("Status.EverythingEnableInDiagnostics"), "diagnostics");
+                        else
+                            SetEverythingStatus(L("Status.EverythingNotRunning"), Color.DarkOrange,
+                                L("Status.EverythingDownloadRecommended"), "download");
 
-                    string statusText = deferred > 0
-                        ? LF(
-                            "Status.ScanCompleteHumanWithDeferred",
-                            movable,
-                            needsReview,
-                            deferred,
-                            excludedCount)
-                        : LF(
-                            "Status.ScanCompleteHuman",
-                            movable,
-                            needsReview,
-                            excludedCount);
+                        int excludedCount = _lastScanExcludedItems != null
+                            ? _lastScanExcludedItems.Count
+                            : 0;
 
-                    statusText +=
-                        "  " +
-                        LF(
-                            "Status.ScanElapsed",
-                            result.ElapsedMilliseconds);
+                        string statusText = deferred > 0
+                            ? LF(
+                                "Status.ScanCompleteHumanWithDeferred",
+                                movable,
+                                needsReview,
+                                deferred,
+                                excludedCount)
+                            : LF(
+                                "Status.ScanCompleteHuman",
+                                movable,
+                                needsReview,
+                                excludedCount);
 
-                    if (request.OnlineLookupEnabled && result.OnlineStats != null)
-                    {
                         statusText +=
                             "  " +
                             LF(
-                                "Status.OnlineAuthorSummary",
-                                result.OnlineStats.LocalRecognized,
-                                result.OnlineStats.PendingOnline,
-                                result.OnlineStats.OnlineResolved,
-                                result.OnlineStats.StillUnresolved);
+                                "Status.ScanElapsed",
+                                result.ElapsedMilliseconds);
+                        if (startupValidation)
+                            statusText = LF("Status.StartupCheckComplete", _startupRestoreMs, result.ElapsedMilliseconds);
+
+                        if (request.OnlineLookupEnabled && result.OnlineStats != null)
+                        {
+                            statusText +=
+                                "  " +
+                                LF(
+                                    "Status.OnlineAuthorSummary",
+                                    result.OnlineStats.LocalRecognized,
+                                    result.OnlineStats.PendingOnline,
+                                    result.OnlineStats.OnlineResolved,
+                                    result.OnlineStats.StillUnresolved);
+                        }
+
+                        if (_plan.Count == 0 && !request.Recursive && excludedCount == 0)
+                            SetWorkflowStatusLink(L("Status.ZeroTopOnlyHint"), "recursive");
+                        else
+                            SetMainStatusLinks(statusText, needsReview, deferred);
+
+                        if (_authorEntityLibraryForm != null && !_authorEntityLibraryForm.IsDisposed && request.OnlineLookupEnabled)
+                            _authorEntityLibraryForm.MarkOnlineProgressComplete();
+
+                        _lblProgressFile.Text =
+                            LF(
+                                "Status.ScanProgressComplete",
+                                _plan.Count);
+                        _lblProgressPath.Text = "";
+                        UpdateMainActionAvailability();
                     }
-
-                    if (_plan.Count == 0 && !request.Recursive && excludedCount == 0)
-                        SetWorkflowStatusLink(L("Status.ZeroTopOnlyHint"), "recursive");
-                    else
-                        SetMainStatusLinks(statusText, needsReview, deferred);
-
-                    if (_authorEntityLibraryForm != null && !_authorEntityLibraryForm.IsDisposed && request.OnlineLookupEnabled)
-                        _authorEntityLibraryForm.MarkOnlineProgressComplete();
-
-                    _lblProgressFile.Text =
-                        LF(
-                            "Status.ScanProgressComplete",
-                            _plan.Count);
-                    _lblProgressPath.Text = "";
-                    UpdateMainActionAvailability();
+                    finally
+                    {
+                        SetScanUiState(false);
+                        if (!_closeAfterScanCancellation) RefreshExecutionSafetyUi();
+                        if (_closeAfterScanCancellation)
+                        {
+                            _closeAfterScanCancellation = false;
+                            Close();
+                        }
+                        else if (rescanRequired && !IsDisposed && !Disposing)
+                            BeginInvoke(new Action(delegate { if (!_isScanning && !_isExecuting) ScanPreview(startupValidation); }));
+                    }
                 };
 
             worker.RunWorkerAsync();
@@ -5394,12 +5332,23 @@ namespace MangaAuthorSorter
                     return worker.CancellationPending;
                 };
 
+            object progressGate = new object();
+            long lastProgressMs = -100;
+            int lastProgressStage = -1;
             Action<ScanProgressInfo> reportProgress =
                 delegate(ScanProgressInfo info)
                 {
                     if (worker.CancellationPending)
                         throw new OperationCanceledException();
-
+                    if (info == null) return;
+                    lock (progressGate)
+                    {
+                        long elapsed = timer.ElapsedMilliseconds;
+                        bool final = !info.Indeterminate && info.Total > 0 && info.Current >= info.Total;
+                        if (!final && lastProgressStage == (int)info.Stage && elapsed - lastProgressMs < 100) return;
+                        lastProgressStage = (int)info.Stage;
+                        lastProgressMs = elapsed;
+                    }
                     worker.ReportProgress(
                         0,
                         info);
@@ -5448,9 +5397,7 @@ namespace MangaAuthorSorter
             {
                 // Reusing a warmup snapshot does not run the provider again:
                 // the previous query's Delta is not a change in this scan.
-                FileIndexDelta delta = warmupMetrics.WarmupHit
-                    ? new FileIndexDelta()
-                    : persistentProvider.LastDelta;
+                FileIndexDelta delta = persistentProvider.LastDelta;
                 indexDelta = delta;
                 // Query-owned timings remain valid even when the source was
                 // returned from an independent warmup/cache path.
@@ -5512,7 +5459,9 @@ namespace MangaAuthorSorter
             ScanSessionSnapshot scanSession = search != null
                 ? search.ScanSession
                 : null;
-            if (_fileIndexCacheReady && scanSession != null)
+            bool memoryCoversSession = snapshotHit && preparedPlan != null && scanSession != null &&
+                scanSession.FileIds.IsSubsetOf(new HashSet<long>(preparedPlan.Where(p => p != null).Select(p => p.FileId)));
+            if (_fileIndexCacheReady && scanSession != null && !memoryCoversSession)
             {
                 try
                 {
@@ -5522,7 +5471,7 @@ namespace MangaAuthorSorter
                     {
                         persistentPlan = _fileIndexCache.LoadMigrationPlans(
                             warmupRequest.PersistentPlanKey,
-                            scanSession, warmupRequest.IdentityDependency);
+                            scanSession, warmupRequest.IdentityDependency, cancelRequested);
                     }
                     finally
                     {
@@ -5543,6 +5492,7 @@ namespace MangaAuthorSorter
                         snapshotHit = true;
                     }
                 }
+                catch (OperationCanceledException) { throw; }
                 catch
                 {
                     // Fall back to per-file recognition facts and rebuilding
@@ -5560,6 +5510,19 @@ namespace MangaAuthorSorter
                     indexDelta.PlanInvalidatedPaths ?? new List<string>(),
                     StringComparer.OrdinalIgnoreCase)
                 : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, SourceIndexFileSnapshot> indexedMetadata =
+                (search.IndexEntries ?? new List<SourceIndexFileSnapshot>())
+                .Where(delegate(SourceIndexFileSnapshot entry) {
+                    return entry != null && !String.IsNullOrEmpty(entry.FullPath);
+                })
+                .GroupBy(delegate(SourceIndexFileSnapshot entry) { return entry.FullPath; },
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(delegate(IGrouping<string, SourceIndexFileSnapshot> group) {
+                    return group.Key;
+                }, delegate(IGrouping<string, SourceIndexFileSnapshot> group) {
+                    return group.First();
+                }, StringComparer.OrdinalIgnoreCase);
+            List<PlanItem> metadataUpdatedPlans = new List<PlanItem>();
             if (snapshotHit && scanSession != null && preparedPlan != null)
             {
                 Dictionary<string, FileInfo> sessionFilesByPath = search.Files
@@ -5582,7 +5545,12 @@ namespace MangaAuthorSorter
                     // prove the same fact again. Only delta-invalidated files
                     // are excluded from the durable per-file plan.
                     if (planInvalidatedPaths.Contains(cachedItem.SourcePath ?? ""))
-                        continue;
+                    {
+                        SourceIndexFileSnapshot metadata;
+                        indexedMetadata.TryGetValue(cachedItem.SourcePath, out metadata);
+                        if (!TryRefreshPlanMetadata(cachedItem, currentFile, metadata, indexDelta)) continue;
+                        metadataUpdatedPlans.Add(cachedItem);
+                    }
                     cachedPlanByPath[cachedItem.SourcePath] = cachedItem;
                 }
             }
@@ -5602,18 +5570,7 @@ namespace MangaAuthorSorter
             // Only the current ScanSession reaches the business pipeline. The
             // complete durable index remains in FileIndexCache.db.
             {
-                Dictionary<string, SourceIndexFileSnapshot> indexedMetadata =
-                    (search.IndexEntries ?? new List<SourceIndexFileSnapshot>())
-                    .Where(delegate(SourceIndexFileSnapshot entry) {
-                        return entry != null && !String.IsNullOrEmpty(entry.FullPath);
-                    })
-                    .GroupBy(delegate(SourceIndexFileSnapshot entry) { return entry.FullPath; },
-                        StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(delegate(IGrouping<string, SourceIndexFileSnapshot> group) {
-                        return group.Key;
-                    }, delegate(IGrouping<string, SourceIndexFileSnapshot> group) {
-                        return group.First();
-                    }, StringComparer.OrdinalIgnoreCase);
+
                 List<PlanItem> recalculatedPlan = planMissFiles.Count == 0
                     ? new List<PlanItem>()
                     : _engine.BuildPlanUsingIndex(
@@ -5673,6 +5630,7 @@ namespace MangaAuthorSorter
                 }
 
                 resultRecalculatedPlan = recalculatedPlan;
+                resultRecalculatedPlan.AddRange(metadataUpdatedPlans);
                 Dictionary<string, PlanItem> recalculatedByPath =
                     recalculatedPlan.ToDictionary(
                         delegate(PlanItem item) { return item.SourcePath; },
@@ -5706,6 +5664,21 @@ namespace MangaAuthorSorter
             result.Plan = plan;
             result.RecalculatedPlan = resultRecalculatedPlan;
             result.PlanCacheReadMs = planCacheReadMs;
+            // Persist newly calculated rows on the worker so SQLite never holds
+            // up filtering or browsing the restored preview.
+            if (_fileIndexCacheReady && search != null && search.ScanSession != null &&
+                FileIndexCacheDatabase.HasNewMigrationPlans(resultRecalculatedPlan))
+            {
+                Stopwatch writeTimer = Stopwatch.StartNew();
+                try
+                {
+                    _fileIndexCache.UpsertMigrationPlans(warmupRequest.PersistentPlanKey,
+                        resultRecalculatedPlan, warmupRequest.IdentityDependency, cancelRequested);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* The current result remains usable if the optional cache fails. */ }
+                finally { writeTimer.Stop(); result.PlanCacheWriteMs = writeTimer.ElapsedMilliseconds; }
+            }
             result.ClassifiedCount = classifiedCount;
             result.MatchedCount = matchedCount;
             result.CandidateCount = search != null && search.Files != null ? search.Files.Count : classifiedCount;
@@ -5736,302 +5709,8 @@ namespace MangaAuthorSorter
             metrics.DestinationCacheMisses += after.DestinationMisses - before.DestinationMisses;
         }
 
-        private List<PlanItem> ProjectPreparedSnapshot(
-            ScanRequest request,
-            List<PlanItem> completePlan,
-            Func<bool> cancelRequested,
-            out int classifiedCount,
-            out int matchedCount)
-        {
-            List<PlanItem> all = completePlan ?? new List<PlanItem>();
-            classifiedCount = all.Count;
-            List<PlanItem> matched = all.Where(
-                delegate(PlanItem item) { return ScanModeRules.Matches(item, request.Mode); })
-                .ToList();
-            matchedCount = matched.Count;
-            if (request.RequestedLimit > 0 && matched.Count > request.RequestedLimit)
-                matched = matched.Take(request.RequestedLimit).ToList();
 
-            // Every mode is a projection of the same complete prepared plan.
-            // Rebuilding NewAuthor here duplicated classification already used by
-            // the main status filters and made the first mode switch unnecessarily slow.
-            return matched;
-        }
 
-        private List<PlanItem> BuildFilteredPlanWithEarlyStop(
-            ScanRequest request,
-            SearchResult search,
-            Action<ScanProgressInfo> reportProgress,
-            Func<bool> cancelRequested,
-            out int classifiedCount,
-            out int matchedCount,
-            out bool earlyStopped,
-            out OnlineAuthorResolutionStats onlineStats)
-        {
-            classifiedCount = 0;
-            matchedCount = 0;
-            earlyStopped = false;
-            onlineStats = new OnlineAuthorResolutionStats();
-
-            List<FileInfo> allFiles = search != null && search.Files != null
-                ? search.Files
-                : new List<FileInfo>();
-
-            if (allFiles.Count == 0)
-                return new List<PlanItem>();
-
-            int requested = Math.Max(0, request.RequestedLimit);
-            int totalCandidates = allFiles.Count;
-            List<PlanItem> classifiedPlan = new List<PlanItem>();
-            List<PlanItem> matchedPlan = new List<PlanItem>();
-
-            // V1.11.6 strict Early Stop:
-            // When no real-time online lookup can change the classification,
-            // classify candidates sequentially and stop immediately after the
-            // requested number of results for the selected scan mode is found.
-            // The candidate list itself has already been enumerated in newest ->
-            // oldest order by EverythingService, so this preserves scan ordering.
-            bool strictEarlyStop =
-                requested > 0 &&
-                (!request.OnlineLookupEnabled || request.MaxOnlineLookups <= 0);
-
-            if (strictEarlyStop)
-            {
-                classifiedPlan =
-                    _engine.BuildPlanUntilMatches(
-                        allFiles,
-                        request.Root,
-                        request.MaxAuthors,
-                        request.GroupTemplate,
-                        request.RecognizedGroupTemplates,
-                        request.AuthorFolderTemplate,
-                        request.RecognizedAuthorFolderTemplates,
-                        request.Mode,
-                        requested,
-                        reportProgress,
-                        cancelRequested,
-                        ScanProgressStage.Planning);
-
-                classifiedCount = classifiedPlan.Count;
-                matchedPlan = classifiedPlan.Where(
-                    delegate(PlanItem item)
-                    {
-                        return ScanModeRules.Matches(item, request.Mode);
-                    }).ToList();
-                matchedCount = matchedPlan.Count;
-
-                earlyStopped =
-                    matchedCount >= requested &&
-                    classifiedCount < totalCandidates;
-            }
-            else
-            {
-                // Online resolution can change a local classification. In that
-                // case, grow the newest-prefix in bounded rounds, resolve only
-                // the newly added slice online, and stop as soon as the target
-                // count is stable. This still avoids the old unconditional full
-                // classification pass in the common case.
-                int prefixCount = requested > 0
-                    ? Math.Min(totalCandidates, Math.Max(32, requested))
-                    : totalCandidates;
-                int previousPrefixCount = 0;
-                int previousMatchedCount = 0;
-                int remainingOnlineLookups = Math.Max(0, request.MaxOnlineLookups);
-
-                while (prefixCount > 0)
-                {
-                    if (cancelRequested != null && cancelRequested())
-                        throw new OperationCanceledException();
-
-                    List<FileInfo> prefixFiles = allFiles.Take(prefixCount).ToList();
-
-                    Action<ScanProgressInfo> planningProgress = reportProgress;
-                    if (requested > 0 && reportProgress != null)
-                    {
-                        int progressPreviousPrefix = previousPrefixCount;
-                        int progressPreviousMatched = previousMatchedCount;
-                        planningProgress =
-                            delegate(ScanProgressInfo info)
-                            {
-                                if (info == null)
-                                    return;
-
-                                if (info.Stage == ScanProgressStage.Planning)
-                                {
-                                    ScanProgressInfo filteredInfo = new ScanProgressInfo();
-                                    filteredInfo.Stage = ScanProgressStage.Filtering;
-                                    filteredInfo.Current = Math.Min(progressPreviousMatched, requested);
-                                    filteredInfo.Total = requested;
-                                    filteredInfo.Checked = Math.Max(progressPreviousPrefix, info.Current);
-                                    filteredInfo.CurrentPath = info.CurrentPath ?? "";
-                                    filteredInfo.Indeterminate = false;
-                                    reportProgress(filteredInfo);
-                                }
-                                else
-                                {
-                                    reportProgress(info);
-                                }
-                            };
-                    }
-
-                    classifiedPlan =
-                        _engine.BuildPlan(
-                            prefixFiles,
-                            request.Root,
-                            request.MaxAuthors,
-                            request.GroupTemplate,
-                            request.RecognizedGroupTemplates,
-                            request.AuthorFolderTemplate,
-                            request.RecognizedAuthorFolderTemplates,
-                            planningProgress,
-                            cancelRequested,
-                            ScanProgressStage.Planning);
-
-                    if (request.OnlineLookupEnabled && remainingOnlineLookups > 0)
-                    {
-                        List<PlanItem> newSlice = classifiedPlan
-                            .Skip(Math.Min(previousPrefixCount, classifiedPlan.Count))
-                            .ToList();
-
-                        if (newSlice.Count > 0)
-                        {
-                            OnlineAuthorResolutionStats roundStats =
-                                ResolveOnlineAuthors(
-                                    request,
-                                    newSlice,
-                                    reportProgress,
-                                    cancelRequested,
-                                    remainingOnlineLookups);
-
-                            MergeOnlineStats(onlineStats, roundStats);
-                            remainingOnlineLookups = Math.Max(
-                                0,
-                                remainingOnlineLookups - Math.Max(0, roundStats.OnlineQueried));
-
-                            if (roundStats.OnlineResolved > 0)
-                            {
-                                classifiedPlan =
-                                    _engine.BuildPlan(
-                                        prefixFiles,
-                                        request.Root,
-                                        request.MaxAuthors,
-                                        request.GroupTemplate,
-                                        request.RecognizedGroupTemplates,
-                                        request.AuthorFolderTemplate,
-                                        request.RecognizedAuthorFolderTemplates,
-                                        reportProgress,
-                                        cancelRequested,
-                                        ScanProgressStage.Rebuilding);
-                            }
-                        }
-                    }
-
-                    matchedPlan = classifiedPlan.Where(
-                        delegate(PlanItem item)
-                        {
-                            return ScanModeRules.Matches(item, request.Mode);
-                        }).ToList();
-
-                    classifiedCount = classifiedPlan.Count;
-                    matchedCount = matchedPlan.Count;
-
-                    if (requested > 0 && reportProgress != null)
-                    {
-                        ScanProgressInfo filteredInfo = new ScanProgressInfo();
-                        filteredInfo.Stage = ScanProgressStage.Filtering;
-                        filteredInfo.Current = Math.Min(matchedCount, requested);
-                        filteredInfo.Total = requested;
-                        filteredInfo.Checked = prefixCount;
-                        filteredInfo.CurrentPath = prefixFiles.Count > 0
-                            ? prefixFiles[prefixFiles.Count - 1].FullName
-                            : "";
-                        filteredInfo.Indeterminate = false;
-                        reportProgress(filteredInfo);
-                    }
-
-                    if (requested <= 0 || matchedCount >= requested || prefixCount >= totalCandidates)
-                        break;
-
-                    previousPrefixCount = prefixCount;
-                    previousMatchedCount = matchedCount;
-                    prefixCount = Math.Min(
-                        totalCandidates,
-                        Math.Max(prefixCount + 1, prefixCount * 2));
-                }
-
-                earlyStopped =
-                    requested > 0 &&
-                    matchedCount >= requested &&
-                    classifiedCount < totalCandidates;
-            }
-
-            if (requested > 0 && matchedPlan.Count > requested)
-                matchedPlan = matchedPlan.Take(requested).ToList();
-
-            // Only New Author mode needs a second planning pass: selecting a
-            // subset changes new-folder group allocation. Exact/Ambiguous/
-            // Unrecognized classifications are already final, so rebuilding
-            // them merely rescans the target author tree and rereads metadata.
-            if (request.Mode != ScanModeKind.NewAuthor)
-                return matchedPlan;
-
-            // Rebuild only the selected result set so new-author group allocation
-            // is based on executable rows rather than on candidates that were
-            // inspected only to discover the requested matches.
-            Dictionary<string, PlanItem> classificationByPath =
-                new Dictionary<string, PlanItem>(StringComparer.OrdinalIgnoreCase);
-            List<FileInfo> matchedFiles = new List<FileInfo>();
-
-            foreach (PlanItem item in matchedPlan)
-            {
-                if (cancelRequested != null && cancelRequested())
-                    throw new OperationCanceledException();
-
-                classificationByPath[item.SourcePath] = item;
-                if (File.Exists(item.SourcePath))
-                    matchedFiles.Add(new FileInfo(item.SourcePath));
-            }
-
-            List<PlanItem> finalPlan =
-                _engine.BuildPlan(
-                    matchedFiles,
-                    request.Root,
-                    request.MaxAuthors,
-                    request.GroupTemplate,
-                    request.RecognizedGroupTemplates,
-                    request.AuthorFolderTemplate,
-                    request.RecognizedAuthorFolderTemplates,
-                    reportProgress,
-                    cancelRequested,
-                    ScanProgressStage.Rebuilding);
-
-            foreach (PlanItem rebuilt in finalPlan)
-            {
-                PlanItem classified;
-                if (classificationByPath.TryGetValue(rebuilt.SourcePath, out classified))
-                    PreserveFilteredClassification(rebuilt, classified);
-            }
-
-            return finalPlan;
-        }
-
-        private static void MergeOnlineStats(
-            OnlineAuthorResolutionStats target,
-            OnlineAuthorResolutionStats source)
-        {
-            if (target == null || source == null)
-                return;
-
-            target.LocalRecognized += source.LocalRecognized;
-            target.PendingOnline += source.PendingOnline;
-            target.OnlineQueried += source.OnlineQueried;
-            target.OnlineResolved += source.OnlineResolved;
-            target.OnlineAmbiguous += source.OnlineAmbiguous;
-            target.OnlineNotFound += source.OnlineNotFound;
-            target.CachedSkipped += source.CachedSkipped;
-            target.StillUnresolved += source.StillUnresolved;
-            target.NewEntities += source.NewEntities;
-        }
 
         private OnlineAuthorResolutionStats ResolveOnlineAuthors(
             ScanRequest request,
@@ -6045,8 +5724,6 @@ namespace MangaAuthorSorter
             // is one evidence chain; it decides which source is useful next.
             IAuthorProvider provider = new EvidenceChainAuthorProvider(
                 request.UseEhentai,
-                request.UseNhentai,
-                request.NhentaiApiKey,
                 request.UseLocalReference);
 
             OnlineAuthorResolver resolver =
@@ -6065,7 +5742,90 @@ namespace MangaAuthorSorter
                 manualLookup);
         }
 
+        internal static bool TryRefreshPlanMetadata(PlanItem item, FileInfo file,
+            SourceIndexFileSnapshot metadata, FileIndexDelta delta)
+        {
+            if (item == null || file == null || delta == null ||
+                !String.Equals(item.FileName, file.Name, StringComparison.Ordinal) ||
+                !String.Equals(item.SourcePath, file.FullName, StringComparison.OrdinalIgnoreCase) ||
+                delta.RecognitionInvalidatedPaths.Contains(item.SourcePath, StringComparer.OrdinalIgnoreCase) ||
+                delta.PathChanges.Any(x => String.Equals(x.OldPath, item.SourcePath, StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(x.NewPath, item.SourcePath, StringComparison.OrdinalIgnoreCase))) return false;
+            try
+            {
+                item.FileSize = metadata != null ? metadata.FileSize : file.Length;
+                item.LastWriteTime = metadata != null ? metadata.LastWriteTimeUtc.ToLocalTime() : file.LastWriteTime;
+                return true;
+            }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+        }
+
+        internal static bool SamePreview(IList<PlanItem> left, IList<PlanItem> right)
+        {
+            if (left == null || right == null || left.Count != right.Count) return false;
+            Dictionary<string, PlanItem> previous = new Dictionary<string, PlanItem>(StringComparer.OrdinalIgnoreCase);
+            foreach (PlanItem item in left)
+            {
+                if (item == null || previous.ContainsKey(item.SourcePath)) return false;
+                previous.Add(item.SourcePath, item);
+            }
+            foreach (PlanItem item in right)
+            {
+                PlanItem old;
+                if (item == null || !previous.TryGetValue(item.SourcePath, out old) || !SamePreviewItem(old, item)) return false;
+            }
+            return true;
+        }
+
+        private static bool SamePreviewItem(PlanItem old, PlanItem item)
+        {
+            return old != null && item != null && !(
+                    old.FileId != item.FileId || old.FileName != item.FileName || old.Author != item.Author || old.MatchedAs != item.MatchedAs ||
+                    old.MatchWhy != item.MatchWhy || old.TargetDir != item.TargetDir || old.TargetPath != item.TargetPath ||
+                    old.Status != item.Status || old.StatusCode != item.StatusCode || old.StatusArgument != item.StatusArgument ||
+                    old.CanMove != item.CanMove || old.FileSize != item.FileSize || old.LastWriteTime != item.LastWriteTime ||
+                    old.RecognitionScore != item.RecognitionScore || old.RecognitionRunnerUpScore != item.RecognitionRunnerUpScore ||
+                    old.EvidenceKind != item.EvidenceKind || old.ManualTargetDir != item.ManualTargetDir ||
+                    old.ManualTargetName != item.ManualTargetName || old.ManualTargetAuthor != item.ManualTargetAuthor ||
+                    old.PlanConflictKind != item.PlanConflictKind || old.ConflictTargetPath != item.ConflictTargetPath ||
+                    old.CanMoveBeforePlanConflict != item.CanMoveBeforePlanConflict || old.StatusBeforePlanConflict != item.StatusBeforePlanConflict ||
+                    old.StatusCodeBeforePlanConflict != item.StatusCodeBeforePlanConflict ||
+                    old.IsExcludedPreview != item.IsExcludedPreview || old.ExclusionRuleName != item.ExclusionRuleName ||
+                    old.ExclusionScope != item.ExclusionScope || old.ExclusionIsDirectory != item.ExclusionIsDirectory ||
+                    !old.ConflictSourcePaths.SequenceEqual(item.ConflictSourcePaths) ||
+                    !old.CandidatePaths.SequenceEqual(item.CandidatePaths) || !old.CandidateNames.SequenceEqual(item.CandidateNames) ||
+                    !old.CandidateIsPlanned.SequenceEqual(item.CandidateIsPlanned));
+        }
+
+        private GridRenderMetrics RefreshValidatedGrid()
+        {
+            Stopwatch timer = Stopwatch.StartNew();
+            string selected = GetCurrentSelectedPath();
+            int first = _grid.FirstDisplayedScrollingRowIndex;
+            PlanItem anchor = GetGridItem(first);
+            _allGridItems = GetPreviewItems().OrderByDescending(p => p.LastWriteTime).ToList();
+            UpdateFilterCounts();
+            ApplyCurrentGridFilter(selected, true);
+            if (anchor != null)
+            {
+                int anchorIndex = _visibleGridItems.FindIndex(p => String.Equals(p.SourcePath, anchor.SourcePath, StringComparison.OrdinalIgnoreCase));
+                if (anchorIndex >= 0) first = anchorIndex;
+            }
+            if (first >= 0 && _grid.RowCount > 0)
+                _grid.FirstDisplayedScrollingRowIndex = Math.Min(first, _grid.RowCount - 1);
+            timer.Stop();
+            return new GridRenderMetrics { TotalMs = timer.ElapsedMilliseconds };
+        }
+
         private GridRenderMetrics RenderGrid(string selectPath)
+        {
+            long start = _startupTrace.Now;
+            try { return RenderGridCore(selectPath); }
+            finally { if (_startupApplyingCache) _startupTrace.Interval("GridRestore", start); }
+        }
+
+        private GridRenderMetrics RenderGridCore(string selectPath)
         {
             GridRenderMetrics metrics = new GridRenderMetrics();
             Stopwatch totalTimer = Stopwatch.StartNew();
@@ -6093,14 +5853,18 @@ namespace MangaAuthorSorter
                 // Short columns are then frozen so filter switches do not repeat
                 // AllCells measurements and the layout stays visually stable.
                 UiStyle.RestoreGridAutoSize(_grid, autoSizeSnapshot);
+                long widthsStart = _startupTrace.Now;
                 FreezeMainGridShortColumnWidths();
+                if (_startupApplyingCache) _startupTrace.Interval("GridWidths", widthsStart);
                 GridInteraction.SetBulkLayoutLoading(_grid, previousGridLoading);
                 _grid.ResumeLayout(false);
             }
 
+            long filterStart = _startupTrace.Now;
             UpdateFilterCounts();
             UpdateViewFilterButtonStyles();
             ApplyCurrentGridFilter(selectPath);
+            if (_startupApplyingCache) _startupTrace.Interval("GridFilter", filterStart);
             totalTimer.Stop();
             metrics.TotalMs = totalTimer.ElapsedMilliseconds;
             return metrics;
@@ -6157,7 +5921,7 @@ namespace MangaAuthorSorter
                 e.ToolTipText = GetGridStatusTooltip(item, RecognitionVisualResolver.Resolve(item));
         }
 
-        private void ApplyCurrentGridFilter(string selectPath)
+        private void ApplyCurrentGridFilter(string selectPath, bool incremental = false)
         {
             if (_grid == null)
                 return;
@@ -6192,24 +5956,38 @@ namespace MangaAuthorSorter
 
                     visibleItems.Add(item);
 
-                    if (displayLimit > 0 && visibleItems.Count >= displayLimit)
-                        break;
-
                     if (selectedIndex < 0 &&
                         !String.IsNullOrWhiteSpace(selectPath) &&
                         String.Equals(item.SourcePath, selectPath, StringComparison.OrdinalIgnoreCase))
                     {
                         selectedIndex = visibleItems.Count - 1;
                     }
+                    if (displayLimit > 0 && visibleItems.Count >= displayLimit)
+                        break;
                 }
                 // Virtual DataGridView cells can retain values already requested
                 // for the previous index-to-item mapping. Reset the virtual row
                 // range before publishing the new model so a status/search switch
                 // cannot paint stale rows from the former filter.
-                _grid.RowCount = 0;
+                bool samePaths = _visibleGridItems.Count == visibleItems.Count &&
+                    _visibleGridItems.Select(p => p.SourcePath).SequenceEqual(
+                        visibleItems.Select(p => p.SourcePath), StringComparer.OrdinalIgnoreCase);
+                if (!samePaths && !incremental) _grid.RowCount = 0;
+                List<PlanItem> oldItems = _visibleGridItems;
                 _visibleGridItems = visibleItems;
                 _grid.RowCount = visibleItems.Count;
-                _grid.Invalidate();
+                if (incremental && !samePaths && _grid.RowCount > 0)
+                {
+                    int firstDisplayed = Math.Max(0, _grid.FirstDisplayedScrollingRowIndex);
+                    int lastDisplayed = Math.Min(_grid.RowCount, firstDisplayed + _grid.DisplayedRowCount(false));
+                    for (int row = firstDisplayed; row < lastDisplayed; row++)
+                        for (int column = 0; column < _grid.ColumnCount; column++)
+                            _grid.UpdateCellValue(column, row);
+                }
+                if (!samePaths) _grid.Invalidate();
+                else
+                    for (int i = 0; i < visibleItems.Count; i++)
+                        if (!Object.ReferenceEquals(oldItems[i], visibleItems[i])) _grid.InvalidateRow(i);
 
                 _grid.CurrentCell = null;
                 _grid.ClearSelection();
@@ -6415,8 +6193,7 @@ namespace MangaAuthorSorter
                 ScanRequest request = new ScanRequest();
                 request.UseLocalReference = _useLocalAuthorReference;
                 request.UseEhentai = _useEhentaiLookup;
-                request.UseNhentai = _useNhentaiLookup;
-                request.NhentaiApiKey = _nhentaiApiKey;
+
                 request.SaveOnlineCache = _saveOnlineAuthorCache;
 
                 OnlineAuthorResolutionStats stats = await Task.Run(
@@ -7212,6 +6989,17 @@ namespace MangaAuthorSorter
 
             _plan = mergedPlan;
             ApplyPlanTargetConflictMarks(_plan);
+            if (_fileIndexCacheReady)
+            {
+                try
+                {
+                    ScanWarmupRequest cacheRequest = BuildWarmupRequest(_currentSourceRoot,
+                        _currentRoot, _chkRecursive.Checked, _scanExtensions);
+                    _fileIndexCache.UpsertMigrationPlans(cacheRequest.PersistentPlanKey,
+                        recalculated, cacheRequest.IdentityDependency);
+                }
+                catch { }
+            }
 
             RenderGrid(
                 keepSelectedPath);
@@ -7302,37 +7090,7 @@ namespace MangaAuthorSorter
                 item.ConflictSourcePaths.Clear();
             }
 
-            IEnumerable<IGrouping<string, PlanItem>> groups = plan
-                .Where(delegate(PlanItem p)
-                {
-                    return p != null && p.CanMove &&
-                        !String.IsNullOrWhiteSpace(p.TargetPath) &&
-                        !String.Equals(p.SourcePath, p.TargetPath, StringComparison.OrdinalIgnoreCase);
-                })
-                .GroupBy(delegate(PlanItem p) { return p.TargetPath; }, StringComparer.OrdinalIgnoreCase);
-
-            foreach (IGrouping<string, PlanItem> group in groups)
-            {
-                List<PlanItem> conflicts = group
-                    .GroupBy(delegate(PlanItem p) { return p.SourcePath; }, StringComparer.OrdinalIgnoreCase)
-                    .Select(delegate(IGrouping<string, PlanItem> sourceGroup) { return sourceGroup.First(); })
-                    .ToList();
-                if (conflicts.Count <= 1) continue;
-
-                List<string> sources = conflicts.Select(delegate(PlanItem p) { return p.SourcePath; }).ToList();
-                foreach (PlanItem item in conflicts)
-                {
-                    item.CanMoveBeforePlanConflict = item.CanMove;
-                    item.StatusBeforePlanConflict = item.Status ?? "";
-                    item.StatusCodeBeforePlanConflict = item.StatusCode;
-                    item.CanMove = false;
-                    item.Status = "批次内目标重名冲突";
-                    item.StatusCode = PlanStatusCode.BatchTargetConflict;
-                    item.PlanConflictKind = "batch-target";
-                    item.ConflictTargetPath = group.Key;
-                    item.ConflictSourcePaths = new List<string>(sources);
-                }
-            }
+            ExecutionSafety.ApplyBatchTargetConflictMarks(plan);
         }
 
         private static bool PathsEqual(string left, string right)
@@ -7412,9 +7170,9 @@ namespace MangaAuthorSorter
                     continue;
                 }
 
-                if (File.Exists(planned.TargetPath) || Directory.Exists(planned.TargetPath))
+                if (probeWritable && (File.Exists(planned.TargetPath) || Directory.Exists(planned.TargetPath)))
                     existingTargets.Add(planned.TargetPath);
-                if (File.Exists(planned.TargetPath + ".moving") || Directory.Exists(planned.TargetPath + ".moving"))
+                if (probeWritable && (File.Exists(planned.TargetPath + ".moving") || Directory.Exists(planned.TargetPath + ".moving")))
                     movingTargets.Add(planned.TargetPath + ".moving");
             }
 
@@ -7426,7 +7184,7 @@ namespace MangaAuthorSorter
                 if (item == null)
                     continue;
 
-                if (!File.Exists(item.SourcePath))
+                if (probeWritable && !File.Exists(item.SourcePath))
                 {
                     check.MissingSources++;
                     continue;
@@ -7434,7 +7192,9 @@ namespace MangaAuthorSorter
 
                 try
                 {
-                    long length = new FileInfo(item.SourcePath).Length;
+                    // UI availability uses indexed sizes. The execution path
+                    // below always probes actual files and targets again.
+                    long length = probeWritable ? new FileInfo(item.SourcePath).Length : Math.Max(0, item.FileSize);
                     check.BatchBytes += length;
                     if (!ExecutionSafety.IsSameVolume(item.SourcePath, item.TargetPath))
                         check.RequiredBytes += length;
@@ -7444,9 +7204,9 @@ namespace MangaAuthorSorter
                     check.MissingSources++;
                 }
 
-                if (File.Exists(item.TargetPath) || Directory.Exists(item.TargetPath))
+                if (probeWritable && (File.Exists(item.TargetPath) || Directory.Exists(item.TargetPath)))
                     existingTargets.Add(item.TargetPath);
-                if (File.Exists(item.TargetPath + ".moving") || Directory.Exists(item.TargetPath + ".moving"))
+                if (probeWritable && (File.Exists(item.TargetPath + ".moving") || Directory.Exists(item.TargetPath + ".moving")))
                     movingTargets.Add(item.TargetPath + ".moving");
 
                 if (!String.IsNullOrWhiteSpace(item.TargetPath) &&
@@ -7562,6 +7322,12 @@ namespace MangaAuthorSorter
         {
             if (_lblSpaceStatus == null || _btnExecute == null)
                 return;
+            if (_restoredPlanNeedsValidation)
+            {
+                _btnExecute.Enabled = false;
+                _executionSafetyAllowsMove = false;
+                return;
+            }
 
             _executionSafetyAllowsMove = false;
 
@@ -7695,7 +7461,7 @@ namespace MangaAuthorSorter
 
         private void ExecuteMove(List<PlanItem> batch, bool selectedOnly)
         {
-            if (_isExecuting || _isScanning)
+            if (_isExecuting || _isScanning || _restoredPlanNeedsValidation)
                 return;
 
             CloseOverlay(true);
@@ -7710,6 +7476,24 @@ namespace MangaAuthorSorter
                 .ToList();
 
             int reviewCount = CountUnresolvedItems(batch);
+            foreach (PlanItem item in movable)
+            {
+                try
+                {
+                    FileInfo file = new FileInfo(item.SourcePath);
+                    if (!file.Exists || (item.FileSize >= 0 && file.Length != item.FileSize) ||
+                        (item.LastWriteTime != DateTime.MinValue && file.LastWriteTimeUtc != item.LastWriteTime.ToUniversalTime()))
+                        throw new IOException();
+                }
+                catch
+                {
+                    _restoredPlanNeedsValidation = true;
+                    RefreshExecutionSafetyUi();
+                    UiMessageBox.Show(this, L("Status.PlanFilesChanged"), L("Status.ScanFailed"),
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
             int skippedCount = Math.Max(0, batch.Count - movable.Count);
             if (movable.Count == 0)
             {

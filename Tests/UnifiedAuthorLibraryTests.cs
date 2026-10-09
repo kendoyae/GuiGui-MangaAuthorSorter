@@ -192,10 +192,61 @@ namespace MangaAuthorSorter.Tests
                 Check(first.GetDependencyVersion(fileA) != second.GetDependencyVersion(fileA) && first.GetDependencyVersion(fileB) == second.GetDependencyVersion(fileB), "single author edit must preserve unrelated dependencies");
                 var hits = cache.LoadMigrationPlans("dependency-test", session, second.GetDependencyVersion);
                 Check(hits.Count == 1 && hits[0].FileName == fileB && cache.LoadSourceFiles(id).Count == 2, "only affected plan must miss; file index must remain");
+                bool canceled = false;
+                try { cache.LoadMigrationPlans("dependency-test", session, second.GetDependencyVersion, () => true); } catch (OperationCanceledException) { canceled = true; }
+                Check(canceled, "cached plan read must observe scan cancellation");
+                int cancellationChecks = 0; canceled = false;
+                try { cache.UpsertMigrationPlans("canceled-write", plan, second.GetDependencyVersion, () => ++cancellationChecks > 1); } catch (OperationCanceledException) { canceled = true; }
+                Check(canceled && cache.LoadMigrationPlans("canceled-write", session, second.GetDependencyVersion).Count == 0, "canceled plan write must roll back its transaction");
                 recognition.UpdateIdentityDependencies(second.GetDependencyVersion, "public"); RecognitionCacheEntry entry;
                 Check(!recognition.TryGet(files[0].FullName, fileA, out entry) && recognition.TryGet(files[1].FullName, fileB, out entry), "recognition cache must invalidate locally");
             }
             Pass("Single-author edits invalidate only related recognition and durable plan rows; file identity index is preserved.");
+        }
+        private static void SchemaV4Views(string root)
+        {
+            string path = Path.Combine(root, "schema-v4.db"); Fixture(path, false, 1);
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(path)) {
+                db.Open(); Sql(db, "ALTER TABLE Entity RENAME TO EntityData; ALTER TABLE EntityData ADD COLUMN SourceId INTEGER; ALTER TABLE EntityData ADD COLUMN DanbooruArtistTag TEXT DEFAULT '';" +
+                    "CREATE TABLE DataSource(Id INTEGER PRIMARY KEY,DisplayName TEXT); INSERT INTO DataSource VALUES(7,'Restored Source'); UPDATE EntityData SET SourceId=7; UPDATE EntityData SET DanbooruArtistTag='danbooru_only' WHERE Id=1;" +
+                    "CREATE VIEW Entity AS SELECT e.Id,e.EntityType,e.CanonicalName,e.RomanName,e.EHArtistTag,e.NHArtistTag,e.NHGroupTag,e.ExternalId,e.VerificationSource,e.EHNamespace,e.EHTag,e.Verified,e.UpdatedUtc,e.NormalizedCanonical,e.DanbooruArtistTag,e.SourceId,s.DisplayName AS Source FROM EntityData e LEFT JOIN DataSource s ON s.Id=e.SourceId;" +
+                    "ALTER TABLE EntityAlias RENAME TO EntityAliasData; ALTER TABLE EntityAliasData ADD COLUMN SourceId INTEGER; UPDATE EntityAliasData SET SourceId=7; CREATE VIEW EntityAlias AS SELECT a.*,s.DisplayName AS Source FROM EntityAliasData a LEFT JOIN DataSource s ON s.Id=a.SourceId;" +
+                    "ALTER TABLE ProviderIdentity RENAME TO ProviderIdentityData; ALTER TABLE ProviderIdentityData ADD COLUMN ExternalId TEXT; ALTER TABLE ProviderIdentityData ADD COLUMN SourceId INTEGER; ALTER TABLE ProviderIdentityData ADD COLUMN EvidenceCount INTEGER DEFAULT 1;" +
+                    "INSERT INTO ProviderIdentityData VALUES(1,'Danbooru','artist','provider_artist','provider artist','external-123',7,2); CREATE VIEW ProviderIdentity AS SELECT p.*,s.DisplayName AS Source FROM ProviderIdentityData p LEFT JOIN DataSource s ON s.Id=p.SourceId; PRAGMA user_version=4;");
+            }
+            string hash = AuthorEntityStore.ContentHash(File.ReadAllBytes(path));
+            AuthorEntityStore store = new AuthorEntityStore(Path.Combine(root, "schema-v4-user.json"), path);
+            Check(store.PreparePublicDatabaseIndex().Ready, "v4 compatibility views must build the runtime index");
+            Check(store.LoadIndex().Resolve("danbooru_only").Entity.DanbooruArtistTag == "danbooru_only", "v4 Danbooru compatibility tag must reach recognition");
+            Check(store.LoadIndex().Resolve("provider artist").Entity.Source == "Restored Source", "SourceId must be resolved through the compatibility view");
+            Check(store.SearchPublicDatabase("provider artist", 10).Count == 1 && store.LoadIndex().Resolve("PublicGroup", "Group").Found, "v4 search and group role mapping");
+            PublicEntitySnapshot snapshot = store.GetPublicSnapshot(1);
+            Check(snapshot.StableKey.Contains("external-123"), "v4 provider external IDs must be available for scoped public binding");
+            store.SavePublicOverride(snapshot, "V4Override", new string[0], new[] { "danbooru_only" }, "");
+            Check(!store.LoadIndex().Resolve("danbooru_only").Found && !store.LoadIndex().Resolve("danbooru only").Found, "v4 disabled compatibility tag must remain disabled");
+            Check(hash == AuthorEntityStore.ContentHash(File.ReadAllBytes(path)), "v4 adapter cannot modify public database");
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(path)) {
+                db.Open(); Sql(db, "UPDATE EntityData SET Id=901 WHERE Id=1; UPDATE EntityAliasData SET EntityId=901 WHERE EntityId=1; UPDATE ProviderIdentityData SET EntityId=901 WHERE EntityId=1; UPDATE ArtistGroup SET ArtistId=901 WHERE ArtistId=1;");
+            }
+            AuthorEntityMatch upgraded = store.LoadIndex().Resolve("PublicAuthor");
+            Check(upgraded.Found && upgraded.Entity.Id == 901 && upgraded.Entity.CanonicalName == "V4Override" && !store.LoadIndex().Resolve("danbooru only").Found, "v4 scoped provider external identity must carry overrides and disabled tags across row ID changes");
+            Pass("Schema v4 compatibility views, restored SourceId labels, Danbooru tags, provider external identity, search/group lookup and read-only overrides passed.");
+        }
+        private static void RealSchemaContract(string root, string path)
+        {
+            string original = AuthorEntityStore.ContentHash(File.ReadAllBytes(path));
+            AuthorEntityStore store = new AuthorEntityStore(Path.Combine(root, "contract-user.json"), path);
+            Stopwatch timer = Stopwatch.StartNew(); var stats = store.PreparePublicDatabaseIndex(); timer.Stop();
+            Check(stats.Ready && stats.Artists > 0, "builder's actual v4 DB must load through compatibility views");
+            long indexMs = timer.ElapsedMilliseconds;
+            var snapshots = store.GetPublicSnapshots(); var artist = snapshots.Values.First(x => x.EntityType == "Artist");
+            Check(snapshots.Values.Any(x => !String.IsNullOrEmpty(x.Source)) && snapshots.Values.Any(x => x.Identities.Count > 0), "actual source/identity view mapping");
+            Check(store.SearchPublicDatabase("", 10).Count > 0, "actual public view listing");
+            store.SavePublicOverride(artist, "ContractOverride", new[] { "__contract_v4_probe__" }, new string[0], "");
+            Check(store.LoadIndex().Resolve("__contract_v4_probe__").Found, "actual v4 public override recognition");
+            store.RemovePublicOverride(store.Load().PublicOverrides.Single().Id);
+            Check(original == AuthorEntityStore.ContentHash(File.ReadAllBytes(path)), "actual builder output must remain byte-identical");
+            Pass("Actual builder Schema v4 output: " + stats.Artists + " artists, " + stats.LookupKeys + " lookup keys, cold index " + indexMs + " ms; source labels, provider identities, search and overrides passed; database bytes unchanged.");
         }
         private static void RealPerformance(string root, string app, string reportDirectory, bool skipSimulation)
         {
@@ -257,6 +308,18 @@ namespace MangaAuthorSorter.Tests
                 watch.Restart(); var cached = cache.LoadMigrationPlans("real-acceptance", session, dependency); watch.Stop();
                 Check(cached.Count == files.Count, "real unchanged rescan must reuse every plan row");
                 Report.Add("- Real indexed scan (configured source/target, read-only files): " + files.Count + " files; first planning " + firstMs + " ms; durable repeated-plan read " + watch.ElapsedMilliseconds + " ms; hits " + cached.Count + "; recalculated 0; source rediscovery 0. Author source " + diagnostics.IdentitySourceMs + " ms, target index " + diagnostics.TargetDirectoryMs + " ms, recognition preparation " + diagnostics.PrepareRecognitionMs + " ms.");
+                AuthorEntityStore overlayStore = new AuthorEntityStore(Path.Combine(root, "real-public-overlay.json"), publicPath);
+                PublicEntitySnapshot overlayCandidate = overlayStore.GetPublicSnapshots().Values.First(x => x.EntityType == "Artist" && (x.Source ?? "").IndexOf("EhTagTranslation", StringComparison.OrdinalIgnoreCase) < 0);
+                overlayStore.SavePublicOverride(overlayCandidate, overlayCandidate.CanonicalName, new[] { "AcceptancePublicOverride" }, new string[0], "");
+                AuthorEntityIndex overlayIndex = overlayStore.LoadIndex();
+                GuiGuiAuthorIndexDatabase overlayAdapter = (GuiGuiAuthorIndexDatabase)typeof(AuthorEntityStore).GetField("_publicDatabase", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(overlayStore);
+                var lookupCache = (System.Collections.IDictionary)typeof(GuiGuiAuthorIndexDatabase).GetField("_cache", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(overlayAdapter);
+                int queryCount = lookupCache.Count; watch.Restart();
+                foreach (FileInfo file in files) overlayIndex.GetDependencyVersion(file.Name);
+                watch.Stop(); Check(queryCount == lookupCache.Count, "public overlay dependencies must not run per-file public identity queries");
+                Check(watch.ElapsedMilliseconds < 10000, "public overlay dependency validation exceeded ten seconds");
+                Report.Add("- Public-overlay scan dependency regression: " + files.Count + " files, " + watch.ElapsedMilliseconds + " ms, zero per-file public identity queries; cancelable plan reads and transactional write cancellation passed.");
+                Console.WriteLine("[PASS] Public overlay dependencies: " + files.Count + " files, " + watch.ElapsedMilliseconds + " ms, zero identity queries.");
                 Dictionary<string, string> expected = plan.ToDictionary(x => x.SourcePath, x => x.Author + "|" + x.MatchedAs + "|" + x.TargetPath + "|" + x.StatusCode, StringComparer.OrdinalIgnoreCase);
                 Check(cached.All(x => expected[x.SourcePath] == x.Author + "|" + x.MatchedAs + "|" + x.TargetPath + "|" + x.StatusCode), "durable repeated plans changed recognition results");
                 List<PlanItem> differences = priorPlan.Where(x => expected.ContainsKey(x.SourcePath) && expected[x.SourcePath] != x.Author + "|" + x.MatchedAs + "|" + x.TargetPath + "|" + x.StatusCode).ToList();
@@ -316,8 +379,8 @@ namespace MangaAuthorSorter.Tests
             string root = Path.Combine(Path.GetTempPath(), "GuiGui-AuthorLibrary-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             string output = Path.GetFullPath(args.Length > 1 ? args[1] : "Docs/AuthorLibraryAcceptance");
             try {
-                CrudAndConflicts(root); SessionEntities(root); ProviderAndImportIsolation(root); PublicUpgrades(root); LocalCacheInvalidation(root); UiPressure(root, output);
-                if (args.Length > 0) RealPerformance(root, Path.GetFullPath(args[0]), output, args.Contains("--skip-simulation"));
+                CrudAndConflicts(root); SessionEntities(root); ProviderAndImportIsolation(root); PublicUpgrades(root); SchemaV4Views(root); LocalCacheInvalidation(root); UiPressure(root, output);
+                if (args.Length > 0) { if (args.Contains("--schema-contract-real")) RealSchemaContract(root, Path.Combine(Path.GetFullPath(args[0]), AppFiles.AuthorIndexDatabase)); else RealPerformance(root, Path.GetFullPath(args[0]), output, args.Contains("--skip-simulation")); }
                 Directory.CreateDirectory(output); File.WriteAllText(Path.Combine(output, "results.md"), "# Author library acceptance\r\n\r\n" + DateTime.UtcNow.ToString("o") + "\r\n\r\n" + String.Join("\r\n", Report.ToArray()), new UTF8Encoding(false)); return 0;
             } catch(Exception ex) { Console.Error.WriteLine("[FAIL] " + ex); return 1; }
             finally { try { Directory.Delete(root, true); } catch { } }

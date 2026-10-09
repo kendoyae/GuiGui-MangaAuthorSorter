@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -130,7 +130,7 @@ namespace MangaAuthorSorter
                 WithStatement(db, "PRAGMA table_info(Entity)", stmt => {
                     while (Native.sqlite3_step(stmt) == SqliteRow) columns.Add(Text(stmt, 1)); });
                 bool stable = columns.Contains("StableEntityKey");
-                WithStatement(db, "SELECT Id,EntityType,CanonicalName,RomanName," + (stable ? "StableEntityKey" : "''") + ",Source,NormalizedCanonical FROM Entity", stmt => {
+                WithStatement(db, "SELECT Id,EntityType,CanonicalName,RomanName," + (stable ? "StableEntityKey" : "''") + ",Source,NormalizedCanonical," + OptionalDanbooruColumn(db, "") + " FROM Entity", stmt => {
                     while (Native.sqlite3_step(stmt) == SqliteRow)
                     {
                         PublicEntitySnapshot row = new PublicEntitySnapshot { Id = Native.sqlite3_column_int(stmt, 0),
@@ -138,6 +138,7 @@ namespace MangaAuthorSorter
                             StableKey = String.IsNullOrWhiteSpace(Text(stmt, 4)) ? "" : "stable:" + Text(stmt, 4), DatabaseVersion = version, Source = Text(stmt, 5) };
                         rows[row.Id] = row;
                         row.LookupNames.Add(new PublicNameLookup { Value = row.CanonicalName, NormalizedName = Text(stmt, 6) });
+                        if (!String.IsNullOrWhiteSpace(Text(stmt, 7))) { AddUnique(row.Aliases, Text(stmt, 7)); row.LookupNames.Add(new PublicNameLookup { Value = Text(stmt, 7), NormalizedName = AuthorRules.NormalizeText(PrettyTag(Text(stmt, 7))) }); }
                     }
                 });
                 WithStatement(db, "SELECT EntityId,Alias,NormalizedAlias FROM EntityAlias", stmt => {
@@ -462,7 +463,7 @@ namespace MangaAuthorSorter
             IntPtr db = GetResolverDatabase();
             if (db == IntPtr.Zero) return new AuthorEntityMatch();
 
-            const string entitySql =
+            string entitySql =
                 "WITH matched(Id) AS (" +
                 "SELECT Id FROM Entity WHERE EntityType='Artist' AND NormalizedCanonical=?1 " +
                 "UNION SELECT a.EntityId FROM EntityAlias a JOIN Entity x ON x.Id=a.EntityId " +
@@ -470,7 +471,7 @@ namespace MangaAuthorSorter
                 "UNION SELECT p.EntityId FROM ProviderIdentity p JOIN Entity x ON x.Id=p.EntityId " +
                 "WHERE x.EntityType='Artist' AND p.Namespace='artist' AND p.NormalizedTag=?1) " +
                 "SELECT e.Id,e.CanonicalName,e.RomanName,e.EHArtistTag,e.NHArtistTag," +
-                "e.Source,e.ExternalId,e.EntityType,e.VerificationSource,e.EHNamespace,e.EHTag,e.Verified,e.UpdatedUtc " +
+                "e.Source,e.ExternalId,e.EntityType,e.VerificationSource,e.EHNamespace,e.EHTag,e.Verified,e.UpdatedUtc,e.NormalizedCanonical," + OptionalDanbooruColumn(db, "e.") + " " +
                 "FROM matched m JOIN Entity e ON e.Id=m.Id " +
                 "ORDER BY e.Verified DESC,e.Id LIMIT 3";
 
@@ -550,9 +551,9 @@ namespace MangaAuthorSorter
                 if (Native.sqlite3_open_v2(Utf8Z(_path), out db, OpenReadOnly, IntPtr.Zero) != SqliteOk || db == IntPtr.Zero)
                     throw new InvalidOperationException("无法以只读方式打开 GuiGuiAuthorIndex.db");
 
-                const string artistSql =
+                string artistSql =
                     "SELECT Id,CanonicalName,RomanName,EHArtistTag,NHArtistTag," +
-                    "Source,ExternalId,EntityType,VerificationSource,EHNamespace,EHTag,Verified,UpdatedUtc,NormalizedCanonical " +
+                    "Source,ExternalId,EntityType,VerificationSource,EHNamespace,EHTag,Verified,UpdatedUtc,NormalizedCanonical," + OptionalDanbooruColumn(db, "") + " " +
                     "FROM Entity WHERE EntityType='Artist'";
                 WithStatement(db, artistSql, delegate(IntPtr stmt)
                 {
@@ -567,6 +568,9 @@ namespace MangaAuthorSorter
                         AddIdentity(index, entity.Id, PrettyTag(entity.EHArtistTag));
                         AddIdentity(index, entity.Id, entity.NHArtistTag);
                         AddIdentity(index, entity.Id, PrettyTag(entity.NHArtistTag));
+                        AddIdentity(index, entity.Id, entity.DanbooruArtistTag);
+                        foreach (string tag in new[] { entity.DanbooruArtistTag, PrettyTag(entity.DanbooruArtistTag) }) foreach (string key in AuthorRules.GetNorms(tag)) AddLookup(mutableLookup, key, entity.Id);
+                        AddIdentity(index, entity.Id, PrettyTag(entity.DanbooruArtistTag));
                     }
                 });
 
@@ -743,7 +747,7 @@ namespace MangaAuthorSorter
                 {
                     foreach (string norm in AuthorRules.GetNorms(creator ?? ""))
                     {
-                        const string artistSql =
+                        string artistSql =
                             "WITH matched(Id) AS (" +
                             "SELECT Id FROM Entity WHERE EntityType='Artist' AND NormalizedCanonical=?1 " +
                             "UNION SELECT a.EntityId FROM EntityAlias a JOIN Entity e ON e.Id=a.EntityId " +
@@ -867,7 +871,7 @@ namespace MangaAuthorSorter
                     AuthorEntityRecord entity = null;
                     WithStatement(db,
                         "SELECT Id,CanonicalName,RomanName,EHArtistTag,NHArtistTag," +
-                        "Source,ExternalId,EntityType,VerificationSource,EHNamespace,EHTag,Verified,UpdatedUtc " +
+                        "Source,ExternalId,EntityType,VerificationSource,EHNamespace,EHTag,Verified,UpdatedUtc,NormalizedCanonical," + OptionalDanbooruColumn(db, "") + " " +
                         "FROM Entity WHERE Id=?1 AND EntityType='Artist'",
                         artistId,
                         delegate(IntPtr stmt)
@@ -910,7 +914,20 @@ namespace MangaAuthorSorter
             e.EHTag = Text(stmt, 10);
             e.Verified = Native.sqlite3_column_int(stmt, 11) != 0;
             e.UpdatedUtc = Text(stmt, 12);
+            e.DanbooruArtistTag = Text(stmt, 14);
             return e;
+        }
+
+        // Schema v4 exposes compatibility views. Inspect the view columns, never
+        // the compressed *Data tables or the builder's maintenance database.
+        private static string OptionalDanbooruColumn(IntPtr db, string prefix)
+        {
+            bool present = false;
+            WithStatement(db, "PRAGMA table_info(Entity)", stmt => {
+                while (Native.sqlite3_step(stmt) == SqliteRow)
+                    if (String.Equals(Text(stmt, 1), "DanbooruArtistTag", StringComparison.OrdinalIgnoreCase)) present = true;
+            });
+            return present ? prefix + "DanbooruArtistTag" : "''";
         }
 
         private static AuthorEntityMatch LoadArtistMatch(

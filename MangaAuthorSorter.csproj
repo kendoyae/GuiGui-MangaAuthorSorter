@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
@@ -32,6 +32,8 @@
     <Compile Include="Core\AppVersion.cs" />
     <Compile Include="Core\UpdateCheckResult.cs" />
     <Compile Include="Core\AuthorRules.cs" />
+    <Compile Include="Core\ReferenceNameRules.cs" />
+    <Compile Include="Core\FileNameStructure.cs" />
     <Compile Include="Core\AuthorIndex.cs" />
     <Compile Include="Core\AuthorScoringRules.cs" />
     <Compile Include="Core\TagCleaningRules.cs" />
@@ -50,6 +52,14 @@
     <Compile Include="Services\AuthorLibraryOperations.cs" />
     <Compile Include="Services\GuiGuiAuthorIndexDatabase.cs" />
     <Compile Include="Services\AuthorReferenceLibraryService.cs" />
+    <Compile Include="Services\AdvancedSourceService.cs" />
+    <Compile Include="Services\AdvancedOperationControl.cs" />
+    <Compile Include="Services\AdvancedSourcePreparation.cs" />
+    <Compile Include="Services\AdvancedSourceSqliteReader.cs" />
+    <Compile Include="Forms\AdvancedAuthorBuilderForm.cs" />
+    <Compile Include="Services\PublicAuthorIndexMergeService.cs" />
+    <Compile Include="Services\PublicIndexSchema.cs" />
+    <Compile Include="Services\PublicAuthorDistributionService.cs" />
     <Compile Include="Services\OnlineAuthorProvider.cs" />
     <Compile Include="Services\BlockListStore.cs" />
     <Compile Include="Services\UserSettingsStore.cs" />
@@ -96,6 +106,8 @@
     <Compile Include="Forms\MainForm.cs" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="SourcesConfig.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <EmbeddedResource Include="SourcesConfig.json"><LogicalName>MangaAuthorSorter.SourcesConfig.json</LogicalName></EmbeddedResource>
     <Content Include="Languages\zh-CN.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
     <Content Include="Languages\en-US.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
     <Content Include="Languages\de-DE.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>

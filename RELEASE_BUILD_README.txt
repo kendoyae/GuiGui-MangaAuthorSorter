@@ -1,4 +1,10 @@
-归归 / GuiGui V1.11.29｜一键分发构建说明
+﻿GuiGui V1.13.5 — author public index integration
+
+REQUIRES WINDOWS BUILD AND ACCEPTANCE before replacing your existing executable.
+Run BUILD_EXE.cmd, then back up GuiGuiAuthorIndex.db and AuthorEntities.json.
+The new public index activates only on application restart.
+
+归归 / GuiGui V1.13.4｜一键分发构建说明
 ================================================
 
 在 Windows 上解压源码包后，可直接双击：

@@ -80,7 +80,7 @@ namespace MangaAuthorSorter
             footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(footer, 0, 3);
 
-            Button execute = NewAutoWidthButton(L("Main.Execute"), 104, true);
+            Button execute = UiStyle.NewAutoWidthButton(L("Main.Execute"), 104, true);
             execute.Anchor = AnchorStyles.None;
             execute.Margin = new Padding(8, 0, 0, 0);
             execute.Click += delegate
@@ -90,7 +90,7 @@ namespace MangaAuthorSorter
                 Close();
             };
 
-            Button cancel = NewAutoWidthButton(L("Common.Cancel"), 88, false);
+            Button cancel = UiStyle.NewAutoWidthButton(L("Common.Cancel"), 88, false);
             cancel.Anchor = AnchorStyles.None;
             cancel.Margin = new Padding(8, 0, 0, 0);
             cancel.Click += delegate
@@ -115,18 +115,7 @@ namespace MangaAuthorSorter
             CancelButton = cancel;
         }
 
-        private Button NewAutoWidthButton(string text, int minimumWidth, bool primary)
-        {
-            Button button = UiStyle.NewButton(text, minimumWidth, primary);
-            Size preferred = TextRenderer.MeasureText(
-                text ?? "",
-                button.Font,
-                new Size(Int32.MaxValue, button.Height),
-                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-            button.Width = Math.Max(minimumWidth, preferred.Width + 34);
-            button.Height = 32;
-            return button;
-        }
+
 
         private string L(string key)
         {

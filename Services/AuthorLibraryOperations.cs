@@ -479,7 +479,7 @@ namespace MangaAuthorSorter
             var circleAliases = db.CircleAliases.ToLookup(x => x.CircleId);
             var authorDisabled = db.Aliases.Where(x => x.Disabled).ToLookup(x => x.AuthorId, x => AuthorRules.NormalizeText(x.Alias));
             var circleDisabled = db.CircleAliases.Where(x => x.Disabled).ToLookup(x => x.CircleId, x => AuthorRules.NormalizeText(x.Alias));
-            var entries = db.Authors.Where(x => x.EntityType == "Artist").SelectMany(x => new[] { x.CanonicalName, x.RomanName, x.EHArtistTag, x.NHArtistTag, x.EHTag }.Concat(authorAliases[x.Id].Where(a => !a.Disabled).Select(a => a.Alias))
+            var entries = db.Authors.Where(x => x.EntityType == "Artist").SelectMany(x => new[] { x.CanonicalName, x.RomanName, x.EHArtistTag, x.NHArtistTag, x.DanbooruArtistTag, x.EHTag }.Concat(authorAliases[x.Id].Where(a => !a.Disabled).Select(a => a.Alias))
                 .Where(n => !authorDisabled[x.Id].Contains(AuthorRules.NormalizeText(n)))
                 .Select(n => new { Name = n, Id = x.Id, Type = "Artist" }))
                 .Concat(db.Circles.SelectMany(x => new[] { x.CanonicalName, x.RomanName, x.EHGroupTag, x.NHGroupTag }.Concat(circleAliases[x.Id].Where(a => !a.Disabled).Select(a => a.Alias))

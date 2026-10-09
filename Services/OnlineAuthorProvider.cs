@@ -44,246 +44,63 @@ namespace MangaAuthorSorter
 
     /// <summary>
     /// The public entry point is an evidence chain rather than a user-selected site.
-    /// E-Hentai supplies primary identity evidence. nHentai can add work evidence,
-    /// but is deliberately capped below the automatic confirmation threshold when
-    /// it is the only source.
+    /// E-Hentai supplies online identity evidence. Downloaded gallery CSVs are
+    /// supplementary work evidence, NOT a new provider of E-Hentai identities.
     /// </summary>
     internal sealed class EvidenceChainAuthorProvider : IAuthorProvider
     {
-        private static readonly SemaphoreSlim EhSlots = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim NhSlots = new SemaphoreSlim(1, 1);
+        private static readonly SemaphoreSlim Slots = new SemaphoreSlim(1, 1);
         private static readonly object RateGate = new object();
-        private static DateTime _ehNextRequestUtc = DateTime.MinValue;
-        private static DateTime _nhNextRequestUtc = DateTime.MinValue;
-        private static int _ehLoad;
-        private static int _nhLoad;
+        private static DateTime _nextRequestUtc = DateTime.MinValue;
+        private static DateTime _retryAfterUtc = DateTime.MinValue;
         private readonly bool _useEhentai;
-        private readonly bool _useNhentai;
         private readonly bool _useLocalReference;
-        private readonly string _nhentaiApiKey;
-
-        public EvidenceChainAuthorProvider() : this(true, true, "", true) { }
-
-        public EvidenceChainAuthorProvider(bool useEhentai, bool useNhentai, string nhentaiApiKey, bool useLocalReference = true)
-        {
-            _useEhentai = useEhentai;
-            _useNhentai = useNhentai;
-            _nhentaiApiKey = (nhentaiApiKey ?? "").Trim();
-            _useLocalReference = useLocalReference;
-        }
-        private static readonly object HealthGate = new object();
-        private static DateTime _ehRetryAfterUtc = DateTime.MinValue;
-        private static DateTime _nhRetryAfterUtc = DateTime.MinValue;
-
+        public EvidenceChainAuthorProvider() : this(true, true) { }
+        public EvidenceChainAuthorProvider(bool useEhentai, bool useLocalReference = true)
+        { _useEhentai = useEhentai; _useLocalReference = useLocalReference; }
         public string Id { get { return "EvidenceChain"; } }
-        public string DisplayName { get { return "E-Hentai + nHentai"; } }
-
-        public async Task<AuthorProviderLookupResult> SearchAuthorAsync(string query, CancellationToken cancellationToken)
+        public string DisplayName { get { return "E-Hentai"; } }
+        public async Task<AuthorProviderLookupResult> SearchAuthorAsync(string query, CancellationToken token)
         {
-            AuthorProviderLookupResult combined = new AuthorProviderLookupResult();
-            combined.Provider = Id;
-            combined.Query = query ?? "";
-            if (String.IsNullOrWhiteSpace(query)) return combined;
-
-            AuthorProviderLookupResult eh = null;
-            AuthorProviderLookupResult nh = null;
-            bool ehAttempted = _useEhentai && CanUseProvider("E-Hentai");
-            bool nhAttempted = _useNhentai && CanUseProvider("nHentai");
-            bool nhFirst = ehAttempted && nhAttempted &&
-                Volatile.Read(ref _nhLoad) < Volatile.Read(ref _ehLoad);
-
-            if (nhFirst)
+            AuthorProviderLookupResult empty = new AuthorProviderLookupResult { Provider = Id, Query = query ?? "" };
+            if (!_useEhentai || String.IsNullOrWhiteSpace(query)) return empty;
+            lock (RateGate)
             {
-                nh = await RunProviderAsync(new NhentaiAuthorProvider(_nhentaiApiKey), query, NhSlots, true, cancellationToken);
-                UpdateProviderHealth("nHentai", nh);
-                Merge(combined, nh);
+                if (DateTime.UtcNow < _retryAfterUtc)
+                    return new AuthorProviderLookupResult { Provider = Id, Query = query, Error = "E-Hentai cooling down", ErrorStatus = "ProviderUnavailable" };
             }
-
-            if (HasStrongCandidate(combined)) return combined;
-
-            if (ehAttempted)
-            {
-                eh = await RunProviderAsync(
-                    new EhentaiAuthorProvider(_useLocalReference), query, EhSlots, false, cancellationToken);
-                UpdateProviderHealth("E-Hentai", eh);
-                Merge(combined, eh);
-            }
-
-            // EH already supplied enough independent works to confirm the identity.
-            // The next network request would not change the current decision.
-            if (HasStrongCandidate(combined)) return combined;
-
-            if (nhAttempted && !nhFirst)
-            {
-                nh = await RunProviderAsync(
-                    new NhentaiAuthorProvider(_nhentaiApiKey), query, NhSlots, true, cancellationToken);
-                UpdateProviderHealth("nHentai", nh);
-                Merge(combined, nh);
-            }
-
-            if (combined.Candidates.Count == 0)
-            {
-                List<string> errors = new List<string>();
-                if (eh != null && !String.IsNullOrWhiteSpace(eh.Error)) errors.Add("E-Hentai: " + eh.Error);
-                if (nh != null && !String.IsNullOrWhiteSpace(nh.Error)) errors.Add("nHentai: " + nh.Error);
-                if (errors.Count > 0)
-                {
-                    combined.Error = String.Join(" | ", errors.ToArray());
-                    if ((eh != null && eh.ErrorStatus == "RateLimited") || (nh != null && nh.ErrorStatus == "RateLimited"))
-                        combined.ErrorStatus = "RateLimited";
-                    else if ((eh != null && eh.ErrorStatus == "AccessDenied") || (nh != null && nh.ErrorStatus == "AccessDenied"))
-                        combined.ErrorStatus = "AccessDenied";
-                    else if (nh != null && nh.ErrorStatus == "InvalidApiKey")
-                        combined.ErrorStatus = "InvalidApiKey";
-                    else if ((eh != null && eh.ErrorStatus == "ProtocolChanged") || (nh != null && nh.ErrorStatus == "ProtocolChanged"))
-                        combined.ErrorStatus = "ProtocolChanged";
-                    else
-                        combined.ErrorStatus = "ProviderUnavailable";
-                }
-                else if ((_useEhentai || _useNhentai) && !ehAttempted && !nhAttempted)
-                {
-                    combined.Error = "所有在线证据源均处于暂时停用期；稍后自动重试。";
-                    combined.ErrorStatus = "ProviderUnavailable";
-                }
-            }
-            return combined;
-        }
-
-        private static bool HasStrongCandidate(AuthorProviderLookupResult result)
-        {
-            return result != null && result.Candidates.Any(delegate(AuthorProviderCandidate x)
-            { return x != null && x.IdentityScore >= 90 && !x.HardConflict; });
-        }
-
-        private static async Task<AuthorProviderLookupResult> RunProviderAsync(
-            IAuthorProvider provider,
-            string query,
-            SemaphoreSlim slots,
-            bool nhentai,
-            CancellationToken cancellationToken)
-        {
-            if (nhentai) Interlocked.Increment(ref _nhLoad); else Interlocked.Increment(ref _ehLoad);
-            bool acquired = false;
+            await Slots.WaitAsync(token);
             try
             {
-                await slots.WaitAsync(cancellationToken);
-                acquired = true;
-                int attempt = 0;
+                int attempts = 0;
                 while (true)
                 {
-                    await WaitForRateWindowAsync(nhentai, cancellationToken);
-                    AuthorProviderLookupResult result = await provider.SearchAuthorAsync(query, cancellationToken);
-                    if (result == null || String.IsNullOrWhiteSpace(result.Error) ||
-                        (!String.Equals(result.ErrorStatus, "ProviderUnavailable", StringComparison.OrdinalIgnoreCase) &&
-                         !String.Equals(result.ErrorStatus, "RateLimited", StringComparison.OrdinalIgnoreCase)))
-                        return result;
-                    if (attempt >= 2) return result;
-                    int delay = attempt == 0 ? 1000 : 2000;
-                    attempt++;
-                    await Task.Delay(delay, cancellationToken);
-                }
-            }
-            finally
-            {
-                if (acquired) slots.Release();
-                if (nhentai) Interlocked.Decrement(ref _nhLoad); else Interlocked.Decrement(ref _ehLoad);
-            }
-        }
-
-        private static async Task WaitForRateWindowAsync(bool nhentai, CancellationToken cancellationToken)
-        {
-            while (true)
-            {
-                int wait;
-                lock (RateGate)
-                {
-                    DateTime now = DateTime.UtcNow;
-                    DateTime next = nhentai ? _nhNextRequestUtc : _ehNextRequestUtc;
-                    wait = next > now ? (int)Math.Ceiling((next - now).TotalMilliseconds) : 0;
-                    if (wait <= 0)
+                    int wait;
+                    lock (RateGate)
                     {
-                        DateTime newNext = now.AddMilliseconds(nhentai ? 6500 : 3500);
-                        if (nhentai) _nhNextRequestUtc = newNext; else _ehNextRequestUtc = newNext;
-                        return;
+                        wait = Math.Max(0, (int)(_nextRequestUtc - DateTime.UtcNow).TotalMilliseconds);
+                        _nextRequestUtc = DateTime.UtcNow.AddMilliseconds(wait + 3500);
                     }
+                    if (wait > 0) await Task.Delay(wait, token);
+                    AuthorProviderLookupResult result = await new EhentaiAuthorProvider(_useLocalReference).SearchAuthorAsync(query, token);
+                    if (result == null) return empty;
+                    foreach (AuthorProviderCandidate candidate in result.Candidates) { if (candidate != null) candidate.Provider = "E-Hentai"; }
+                    if (!String.IsNullOrWhiteSpace(result.Error))
+                    {
+                        int minutes = result.ErrorStatus == "AccessDenied" || result.ErrorStatus == "ProtocolChanged" ? 30 :
+                            result.ErrorStatus == "RateLimited" ? 10 : result.ErrorStatus == "ProviderUnavailable" ? 5 : 0;
+                        if (minutes > 0) lock (RateGate) { _retryAfterUtc = DateTime.UtcNow.AddMinutes(minutes); }
+                        if (attempts++ < 2 && (result.ErrorStatus == "RateLimited" || result.ErrorStatus == "ProviderUnavailable"))
+                        { await Task.Delay(attempts * 1000, token); continue; }
+                    }
+                    result.Provider = Id;
+                    return result;
                 }
-                await Task.Delay(Math.Min(wait, 500), cancellationToken);
             }
-        }
-
-        private static bool CanUseProvider(string provider)
-        {
-            lock (HealthGate)
-            {
-                DateTime retry = String.Equals(provider, "nHentai", StringComparison.OrdinalIgnoreCase)
-                    ? _nhRetryAfterUtc
-                    : _ehRetryAfterUtc;
-                return retry <= DateTime.UtcNow;
-            }
-        }
-
-        private static void UpdateProviderHealth(string provider, AuthorProviderLookupResult result)
-        {
-            if (result == null || String.IsNullOrWhiteSpace(result.Error)) return;
-            TimeSpan cooldown;
-            if (String.Equals(result.ErrorStatus, "AccessDenied", StringComparison.OrdinalIgnoreCase))
-                cooldown = TimeSpan.FromMinutes(30);
-            else if (String.Equals(result.ErrorStatus, "RateLimited", StringComparison.OrdinalIgnoreCase))
-                cooldown = TimeSpan.FromMinutes(10);
-            else if (String.Equals(result.ErrorStatus, "ProtocolChanged", StringComparison.OrdinalIgnoreCase))
-                cooldown = TimeSpan.FromMinutes(30);
-            else if (String.Equals(result.ErrorStatus, "ProviderUnavailable", StringComparison.OrdinalIgnoreCase))
-                cooldown = TimeSpan.FromMinutes(5);
-            else
-                return;
-
-            lock (HealthGate)
-            {
-                DateTime retry = DateTime.UtcNow.Add(cooldown);
-                if (String.Equals(provider, "nHentai", StringComparison.OrdinalIgnoreCase))
-                    _nhRetryAfterUtc = retry;
-                else
-                    _ehRetryAfterUtc = retry;
-            }
-        }
-
-        private static void Merge(AuthorProviderLookupResult target, AuthorProviderLookupResult source)
-        {
-            if (target == null || source == null) return;
-            foreach (AuthorProviderCandidate incoming in source.Candidates ?? new List<AuthorProviderCandidate>())
-            {
-                if (incoming == null) continue;
-                AuthorProviderCandidate existing = target.Candidates.FirstOrDefault(delegate(AuthorProviderCandidate x)
-                {
-                    return x != null && String.Equals(
-                        NormalizeProviderName(x.TagName),
-                        NormalizeProviderName(incoming.TagName),
-                        StringComparison.OrdinalIgnoreCase);
-                });
-                if (existing == null)
-                {
-                    incoming.Provider = target.Provider;
-                    target.Candidates.Add(incoming);
-                    continue;
-                }
-
-                existing.IndependentWorkCount = Math.Max(existing.IndependentWorkCount, incoming.IndependentWorkCount);
-                existing.IdentityScore = Math.Max(existing.IdentityScore, incoming.IdentityScore);
-                existing.HardConflict = existing.HardConflict || incoming.HardConflict;
-                foreach (string evidence in incoming.EvidenceSources)
-                    if (!existing.EvidenceSources.Contains(evidence)) existing.EvidenceSources.Add(evidence);
-                foreach (string alias in incoming.OtherNames)
-                    if (!existing.OtherNames.Contains(alias)) existing.OtherNames.Add(alias);
-                if (String.IsNullOrWhiteSpace(existing.GroupName)) existing.GroupName = incoming.GroupName;
-            }
-        }
-
-        private static string NormalizeProviderName(string value)
-        {
-            string n = (value ?? "").Trim().Replace(' ', '_');
-            return AuthorRules.NormalizeText(n).Replace(' ', '_');
+            finally { Slots.Release(); }
         }
     }
+
 
     internal abstract class WorkEvidenceAuthorProvider : IAuthorProvider
     {
@@ -403,10 +220,7 @@ namespace MangaAuthorSorter
             try
             {
                 string originalQuery = query.Trim();
-                string referenceTag = "";
-                string providerQuery = _useLocalReference && AuthorReferenceLibraryService.Current.TryResolveArtist(originalQuery, out referenceTag)
-                    ? referenceTag
-                    : originalQuery;
+                string providerQuery = originalQuery;
                 string namespaceQuery = "artist:\"" + providerQuery + "$\"";
                 string url = "https://e-hentai.org/?f_search=" + Uri.EscapeDataString(namespaceQuery);
                 string html = await DownloadStringAsync(url, cancellationToken);
@@ -470,11 +284,6 @@ namespace MangaAuthorSorter
                         candidate.IndependentWorkCount = workCount;
                         candidate.IdentityScore = ScoreForWorks(workCount, true);
                         candidate.EvidenceSources.Add("E-Hentai/LiveSearch+LiveGData");
-                        if (!String.Equals(NormalizeTag(originalQuery), NormalizeTag(providerQuery), StringComparison.OrdinalIgnoreCase))
-                            candidate.EvidenceSources.Add("EhTagTranslation/LocalReference");
-                        int aggregateWorks;
-                        if (_useLocalReference && AuthorReferenceLibraryService.TagDatabase.TryGetArtistEvidence(providerQuery, out aggregateWorks))
-                            candidate.EvidenceSources.Add("EhTagDb/LocalAggregate(" + aggregateWorks + ")");
                         result.Candidates.Add(candidate);
                     }
                 }
@@ -702,114 +511,6 @@ namespace MangaAuthorSorter
         }
     }
 
-    internal sealed class NhentaiAuthorProvider : WorkEvidenceAuthorProvider
-    {
-        private sealed class NhSearchDto { public List<NhGalleryDto> result { get; set; } public int total { get; set; } }
-        private sealed class NhGalleryDto
-        {
-            public int id { get; set; }
-            public string english_title { get; set; }
-            public string japanese_title { get; set; }
-            public List<NhTagDto> tags { get; set; }
-        }
-        private sealed class NhTagDto { public string type { get; set; } public string name { get; set; } public string slug { get; set; } }
-        private readonly string _apiKey;
-
-        public NhentaiAuthorProvider() : this("") { }
-        public NhentaiAuthorProvider(string apiKey) { _apiKey = (apiKey ?? "").Trim(); }
-
-        public override string Id { get { return "nHentai"; } }
-        public override string DisplayName { get { return "nHentai"; } }
-
-        public override async Task<AuthorProviderLookupResult> SearchAuthorAsync(string query, CancellationToken cancellationToken)
-        {
-            AuthorProviderLookupResult result = new AuthorProviderLookupResult();
-            result.Provider = Id;
-            result.Query = query ?? "";
-            if (String.IsNullOrWhiteSpace(query)) return result;
-            try
-            {
-                string structured = "artist:\"" + query.Trim() + "\"";
-                string url = "https://nhentai.net/api/v2/search?query=" + Uri.EscapeDataString(structured) + "&page=1&sort=date";
-                string auth = _apiKey.Length > 0 ? "Key " + _apiKey : null;
-                string json = await DownloadStringAsync(url, cancellationToken, auth);
-                JavaScriptSerializer serializer = new JavaScriptSerializer();
-                serializer.MaxJsonLength = Int32.MaxValue;
-                NhSearchDto data = serializer.Deserialize<NhSearchDto>(json) ?? new NhSearchDto();
-                bool titleBridge = false;
-                if (data.total <= 0 || data.result == null || data.result.Count == 0)
-                {
-                    string plainUrl = "https://nhentai.net/api/v2/search?query=" + Uri.EscapeDataString(query.Trim()) + "&page=1&sort=date";
-                    string plainJson = await DownloadStringAsync(plainUrl, cancellationToken, auth);
-                    data = serializer.Deserialize<NhSearchDto>(plainJson) ?? new NhSearchDto();
-                    titleBridge = true;
-                }
-                int works = data.total;
-                string group = "";
-                string artist = "";
-                NhGalleryDto first = (data.result ?? new List<NhGalleryDto>()).FirstOrDefault();
-                if (titleBridge)
-                {
-                    first = (data.result ?? new List<NhGalleryDto>()).FirstOrDefault(delegate(NhGalleryDto gallery)
-                    {
-                        return gallery != null && String.Equals(
-                            NormalizeTag(GetLeadingBracket(gallery.japanese_title)),
-                            NormalizeTag(query),
-                            StringComparison.OrdinalIgnoreCase);
-                    });
-                }
-                if (first != null)
-                {
-                    string detailUrl = "https://nhentai.net/api/v2/galleries/" + first.id;
-                    string detailJson = await DownloadStringAsync(detailUrl, cancellationToken, auth);
-                    NhGalleryDto detail = serializer.Deserialize<NhGalleryDto>(detailJson) ?? new NhGalleryDto();
-                    NhTagDto artistTag = (detail.tags ?? new List<NhTagDto>()).FirstOrDefault(delegate(NhTagDto tag)
-                    { return tag != null && String.Equals(tag.type, "artist", StringComparison.OrdinalIgnoreCase); });
-                    NhTagDto groupTag = (detail.tags ?? new List<NhTagDto>()).FirstOrDefault(delegate(NhTagDto tag)
-                    { return tag != null && String.Equals(tag.type, "group", StringComparison.OrdinalIgnoreCase); });
-                    if (artistTag != null) artist = artistTag.name ?? artistTag.slug ?? "";
-                    if (groupTag != null) group = groupTag.name ?? groupTag.slug ?? "";
-                }
-                if (works > 0 && artist.Length > 0)
-                {
-                    AuthorProviderCandidate candidate = new AuthorProviderCandidate();
-                    candidate.Provider = Id;
-                    candidate.ExternalId = "artist:" + artist;
-                    candidate.TagName = artist;
-                    candidate.GroupName = group;
-                    if (!String.Equals(NormalizeTag(artist), NormalizeTag(query), StringComparison.OrdinalIgnoreCase))
-                        candidate.OtherNames.Add(query.Trim());
-                    candidate.IndependentWorkCount = works;
-                    candidate.IdentityScore = ScoreForWorks(works, true);
-                    candidate.EvidenceSources.Add(titleBridge ? "nHentai/API-v2-TitleBridge" : "nHentai/API-v2");
-                    result.Candidates.Add(candidate);
-                }
-            }
-            catch (WebException ex)
-            {
-                if (cancellationToken.IsCancellationRequested) throw new OperationCanceledException();
-                result.Error = ex.Message;
-                HttpWebResponse response = ex.Response as HttpWebResponse;
-                result.ErrorStatus = response != null && response.StatusCode == HttpStatusCode.Unauthorized
-                    ? "InvalidApiKey"
-                    : ClassifyWebError(ex);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { result.Error = ex.Message; result.ErrorStatus = "ProtocolChanged"; }
-            return result;
-        }
-
-        private static string GetLeadingBracket(string title)
-        {
-            string value = (title ?? "").TrimStart();
-            if (value.Length < 3) return "";
-            char close = value[0] == '[' ? ']' : value[0] == '［' ? '］' : value[0] == '【' ? '】' : '\0';
-            if (close == '\0') return "";
-            int end = value.IndexOf(close, 1);
-            return end > 1 ? value.Substring(1, end - 1).Trim() : "";
-        }
-    }
-
     internal sealed class OnlineAuthorResolutionStats
     {
         public int LocalRecognized;
@@ -859,13 +560,14 @@ namespace MangaAuthorSorter
             if (plan == null || _store == null || _provider == null) return stats;
 
             AuthorEntityIndex knownEntities = _store.LoadIndex();
+            int titleQueries = ResolveWorkTitles(plan, Math.Max(1, maxLookups), saveCache, progress, cancelRequested);
+            stats.OnlineQueried = titleQueries;
             List<string> queries = CollectQueries(plan, _tagCleaningStore, knownEntities, manualLookup);
             stats.PendingOnline = queries.Count;
             stats.LocalRecognized = Math.Max(0, plan.Count - CountUnresolved(plan));
 
             if (maxLookups <= 0) maxLookups = 1;
-            if (queries.Count > maxLookups)
-                queries = queries.Take(maxLookups).ToList();
+            queries = queries.Take(Math.Max(0, maxLookups - titleQueries)).ToList();
 
             int total = queries.Count;
             CancellationTokenSource batchCts = new CancellationTokenSource();
@@ -897,6 +599,19 @@ namespace MangaAuthorSorter
             int locallyMerged = _store.MergeResolvedLocalReferences(localMatches, saveCache);
             stats.OnlineResolved += locallyMerged;
             stats.NewEntities += locallyMerged;
+
+            // A local work-level match is corroborative only. Preserve a reviewable
+            // candidate, never automatically assign an E-Hentai identity or alias.
+            if (_useLocalReference)
+            {
+                foreach (string pendingName in queries)
+                {
+                    long works;
+                    if (AuthorReferenceLibraryService.Current.TryGetArtistWorkEvidence(pendingName, out works))
+                        _store.SaveLookupStatus("nh-metadata-archive", pendingName, "candidate",
+                            "gallery-level evidence: " + works + " distinct works; identity unverified", saveCache);
+                }
+            }
 
             Dictionary<string, Task<AuthorProviderLookupResult>> scheduled =
                 new Dictionary<string, Task<AuthorProviderLookupResult>>(StringComparer.OrdinalIgnoreCase);
@@ -1038,6 +753,55 @@ namespace MangaAuthorSorter
             stats.StillUnresolved = Math.Max(0, stats.PendingOnline - stats.OnlineResolved);
             batchCts.Dispose();
             return stats;
+        }
+
+        private int ResolveWorkTitles(List<PlanItem> plan, int limit, bool saveCache,
+            Action<ScanProgressInfo> progress, Func<bool> cancelRequested)
+        {
+            int queried = 0;
+            HashSet<string> activities = FileNameStructure.DiscoverActivities(plan.Where(x => x != null)
+                .Select(x => Path.GetFileNameWithoutExtension(x.FileName ?? "")));
+            foreach (var group in plan.Where(x => x != null && String.IsNullOrWhiteSpace(x.Author))
+                .Select(x => new { Item = x, Structure = FileNameStructure.Parse(Path.GetFileNameWithoutExtension(x.FileName ?? ""), activities) })
+                .Where(x => x.Structure.SuspectedActivity && x.Structure.WorkTitle.Length >= 2)
+                .GroupBy(x => x.Structure.WorkTitle))
+            {
+                if (cancelRequested != null && cancelRequested()) throw new OperationCanceledException();
+                string title = group.Key;
+                AuthorLookupCacheRecord cached = _store.GetFreshLookup("WorkTitle-v1", title, 14);
+                List<string> names = _store.GetWorkTitleCandidates(title);
+                if (cached == null && queried < limit)
+                {
+                    if (progress != null) progress(new ScanProgressInfo { Stage = ScanProgressStage.OnlineResolving, Current = queried + 1, Total = limit, CurrentPath = title });
+                    using (CancellationTokenSource cancellation = new CancellationTokenSource())
+                    {
+                        Task<AuthorProviderLookupResult> task = _provider.SearchAuthorAsync(title, cancellation.Token);
+                        while (!task.IsCompleted)
+                        {
+                            if (cancelRequested != null && cancelRequested()) { cancellation.Cancel(); throw new OperationCanceledException(); }
+                            Thread.Sleep(50);
+                        }
+                        queried++;
+                        if (task.IsCanceled) throw new OperationCanceledException();
+                        if (task.IsFaulted || task.Result == null || !String.IsNullOrWhiteSpace(task.Result.Error)) continue;
+                        names = task.Result.Candidates.Where(x => x != null && !x.HardConflict &&
+                            String.Equals(x.TagNamespace, "artist", StringComparison.OrdinalIgnoreCase) &&
+                            x.EvidenceSources.Any(s => s.IndexOf("Title", StringComparison.OrdinalIgnoreCase) >= 0))
+                            .Select(x => x.TagName)
+                            .Where(x => !String.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        // Store work metadata only. A title must never become an author alias.
+                        _store.SaveLookupStatus("WorkTitle-v1", title, names.Count > 0 ? "candidate" : "not_found",
+                            new JavaScriptSerializer().Serialize(names), saveCache);
+                    }
+                }
+                foreach (var entry in group)
+                {
+                    foreach (string name in names)
+                        if (!entry.Item.CandidateNames.Contains(name)) { entry.Item.CandidateNames.Add(name); entry.Item.CandidatePaths.Add(""); entry.Item.CandidateIsPlanned.Add(false); }
+                    if (names.Count > 0) entry.Item.MatchWhy += "; title metadata candidates (confirmation required): " + String.Join(", ", names);
+                }
+            }
+            return queried;
         }
 
         private bool ShouldSkipCachedLookup(string query)

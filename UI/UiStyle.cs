@@ -418,6 +418,30 @@ namespace MangaAuthorSorter
             return panel;
         }
 
+        public static Label NewSectionTitle(string text)
+        {
+            Label label = new Label();
+            label.Text = text ?? "";
+            label.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 9.5F, FontStyle.Bold);
+            label.ForeColor = UiStyle.Text;
+            label.AutoSize = false;
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            return label;
+        }
+
+        public static Button NewAutoWidthButton(string text, int minimumWidth, bool primary)
+        {
+            Button button = UiStyle.NewButton(text, minimumWidth, primary);
+            Size preferred = TextRenderer.MeasureText(
+                text ?? "",
+                button.Font,
+                new Size(Int32.MaxValue, button.Height),
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            button.Width = Math.Max(minimumWidth, preferred.Width + 34);
+            button.Height = 32;
+            return button;
+        }
+
         public static Label NewCaption(string text)
         {
             Label label = new Label();

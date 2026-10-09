@@ -5,6 +5,8 @@ Core\FileIndexModels.cs
 Core\AppVersion.cs
 Core\UpdateCheckResult.cs
 Core\AuthorRules.cs
+Core\ReferenceNameRules.cs
+Core\FileNameStructure.cs
 Core\AuthorIndex.cs
 Core\AuthorScoringRules.cs
 Core\TagCleaningRules.cs
@@ -23,6 +25,14 @@ Services\AuthorEntityStore.cs
 Services\AuthorLibraryOperations.cs
 Services\GuiGuiAuthorIndexDatabase.cs
 Services\AuthorReferenceLibraryService.cs
+Services\AdvancedSourceService.cs
+Services\AdvancedOperationControl.cs
+Services\AdvancedSourcePreparation.cs
+Services\AdvancedSourceSqliteReader.cs
+Forms\AdvancedAuthorBuilderForm.cs
+Services\PublicAuthorIndexMergeService.cs
+Services\PublicIndexSchema.cs
+Services\PublicAuthorDistributionService.cs
 Services\OnlineAuthorProvider.cs
 Services\BlockListStore.cs
 Services\UserSettingsStore.cs
@@ -31,6 +41,9 @@ Services\EverythingService.cs
 Services\FileSystemIndexProviders.cs
 Services\FileIndexCacheDatabase.cs
 Services\PersistentSourceIndexProvider.cs
+Services\ParsedMetadataCacheService.cs
+Services\RecognitionFactCacheService.cs
+Services\DestinationIndexCacheService.cs
 Services\ScanWarmupService.cs
 Services\UpdateService.cs
 Services\DonationService.cs
@@ -38,9 +51,6 @@ Services\EmbeddedResourceService.cs
 Services\GermanLanguagePack.cs
 Services\HistoryStore.cs
 Services\SimulationBenchmarkService.cs
-Services\ParsedMetadataCacheService.cs
-Services\RecognitionFactCacheService.cs
-Services\DestinationIndexCacheService.cs
 UI\FastDataGridView.cs
 UI\GridInteraction.cs
 UI\RecognitionVisual.cs

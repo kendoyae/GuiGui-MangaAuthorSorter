@@ -17,6 +17,7 @@ namespace MangaAuthorSorter
         public long IdentitySourceMs, TargetDirectoryMs, InitialIndexMs;
         public long PrepareRecognitionMs, PlanLoopMs, IncrementalIndexMs;
         public int InitialBuilds, IncrementalAdds, NewAuthorFolders;
+        public readonly HashSet<string> RecognizedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> UniqueAuthors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public int UniqueAuthorCount { get { return UniqueAuthors.Count; } }
     }
@@ -470,6 +471,8 @@ namespace MangaAuthorSorter
             }
 
             int planCurrent = 0;
+            HashSet<string> scanActivities = useEarlyStop ? new HashSet<string>()
+                : FileNameStructure.DiscoverActivities(sourceSequence.Select(x => Path.GetFileNameWithoutExtension(x.FileName ?? "")));
             phaseTick = diagnostics != null ? Stopwatch.GetTimestamp() : 0;
             Dictionary<string, PreparedRecognition> preparedRecognitions =
                 useEarlyStop
@@ -532,6 +535,7 @@ namespace MangaAuthorSorter
                 p.ManualTargetAuthor = original.ManualTargetAuthor ?? "";
 
                 PreparedRecognition prepared;
+                if (diagnostics != null) diagnostics.RecognizedFiles.Add(p.SourcePath);
                 preparedRecognitions.TryGetValue(p.SourcePath ?? "", out prepared);
                 List<string> authorCandidates = prepared != null
                     ? new List<string>(prepared.Candidates)
@@ -540,6 +544,23 @@ namespace MangaAuthorSorter
                     authorCandidates.Count > 0
                         ? authorCandidates[0]
                         : null;
+                FileNameStructure fileStructure = FileNameStructure.Parse(Path.GetFileNameWithoutExtension(p.FileName ?? ""), scanActivities);
+                AuthorEntityMatch prefixEntity = entityIndex != null && fileStructure.Prefix.Length > 0
+                    ? entityIndex.Resolve(fileStructure.Prefix) : null;
+                if (prefixEntity != null && prefixEntity.Found && prefixEntity.Entity != null && prefixEntity.Entity.UserConfirmed)
+                {
+                    // An explicit user decision outranks inferred syntax.
+                    authorCandidates.Add(fileStructure.Prefix);
+                    author = authorCandidates[0];
+                }
+                else if (fileStructure.SuspectedActivity)
+                {
+                    // Scan-dependent evidence is applied after the filename cache
+                    // and is never written back as a permanent parsing fact.
+                    if (!FileNameStructure.Parse(Path.GetFileNameWithoutExtension(p.FileName ?? "")).SuspectedActivity)
+                        authorCandidates = AuthorRules.GetAuthorCandidatesFromFileName(fileStructure.IdentityText, _tagCleaningStore);
+                    author = authorCandidates.Count > 0 ? authorCandidates[0] : null;
+                }
                 AuthorMatchResult scoredMatch = prepared != null ? prepared.Scored : null;
 
                 // Deterministic fallback for untagged legacy files: an exact,
@@ -570,7 +591,7 @@ namespace MangaAuthorSorter
                     String.IsNullOrWhiteSpace(p.ManualTargetAuthor))
                 {
                     string fileBaseName = Path.GetFileNameWithoutExtension(p.FileName);
-                    if (scoredMatch == null) scoredMatch = scoringContext.Match(fileBaseName, searchableAuthors);
+                    if (scoredMatch == null || fileStructure.SuspectedActivity) scoredMatch = scoringContext.Match(fileStructure.IdentityText, searchableAuthors);
                     p.RecognitionScore = scoredMatch.Score;
                     p.RecognitionRunnerUpScore = scoredMatch.RunnerUpScore;
                     if (scoredMatch.Type == AuthorMatchType.NotFound && scoredMatch.Score > 0)
@@ -618,6 +639,16 @@ namespace MangaAuthorSorter
                     p.Status = "无法识别作者";
                     p.StatusCode = PlanStatusCode.Unrecognized;
                     p.EvidenceKind = RecognitionEvidenceKind.Unrecognized;
+                    if (_entityStore != null && fileStructure.WorkTitle.Length > 0)
+                    {
+                        foreach (string name in _entityStore.GetWorkTitleCandidates(fileStructure.WorkTitle))
+                        {
+                            p.CandidateNames.Add(name);
+                            p.CandidatePaths.Add("");
+                            p.CandidateIsPlanned.Add(false);
+                        }
+                        if (p.CandidateNames.Count > 0) p.MatchWhy = "Local work metadata: " + String.Join(", ", p.CandidateNames) + "; confirmation required";
+                    }
                     if (AddResolvedAndShouldStop(
                             resolved,
                             p,
@@ -1001,6 +1032,19 @@ namespace MangaAuthorSorter
                     "");
             }
 
+            foreach (PlanItem item in resolved)
+            {
+                FileNameStructure structure = FileNameStructure.Parse(Path.GetFileNameWithoutExtension(item.FileName ?? ""), scanActivities);
+                if (!structure.SuspectedActivity) continue;
+                string explanation = "[structure] " + structure.Prefix + ": " + structure.Reason + "; confidence=" + structure.PrefixConfidence;
+                AuthorEntityMatch confirmedPrefix = entityIndex != null ? entityIndex.Resolve(structure.Prefix) : null;
+                if (confirmedPrefix != null && confirmedPrefix.Found && confirmedPrefix.Entity != null && confirmedPrefix.Entity.UserConfirmed)
+                    explanation += "; user-confirmed identity retained";
+                else explanation += "; prefix excluded from author candidates";
+                if (structure.Creators.Count > 0) explanation += "; artist=" + String.Join(", ", structure.Creators) + "; circle=" + structure.Society;
+                explanation += "; selected=" + (String.IsNullOrWhiteSpace(item.Author) ? "pending confirmation; title=" + structure.WorkTitle : item.Author);
+                item.MatchWhy = explanation + (String.IsNullOrWhiteSpace(item.MatchWhy) ? "" : "; " + item.MatchWhy);
+            }
             if (RecognitionFactCache != null)
             {
                 foreach (PlanItem item in resolved) RecognitionFactCache.Store(item);
@@ -2155,101 +2199,11 @@ namespace MangaAuthorSorter
             }
         }
 
-        private static List<AuthorFolder> FindFoldersByExactDirectNorm(
-            string norm,
-            List<AuthorFolder> existing)
-        {
-            List<AuthorFolder> hits = new List<AuthorFolder>();
-            if (String.IsNullOrWhiteSpace(norm)) return hits;
-            foreach (AuthorFolder folder in existing)
-                if (folder.DirectNorms.Contains(norm)) hits.Add(folder);
-            return UniqueFolders(hits);
-        }
 
-        private static List<AuthorFolder> FindDirectFoldersForCandidate(
-            string candidate,
-            List<AuthorFolder> existing)
-        {
-            HashSet<string> norms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string full = AuthorRules.NormalizeText(candidate);
-            string core = AuthorRules.NormalizeText(
-                AuthorRules.GetDirectMatchIdentity(candidate));
-            string terminalNormalized =
-                AuthorRules.NormalizeTerminalPunctuation(
-                    AuthorRules.GetDirectMatchIdentity(candidate));
-            string cjkWhitespaceNormalized =
-                AuthorRules.NormalizeCjkIdentityWhitespace(
-                    AuthorRules.GetDirectMatchIdentity(candidate));
-            if (full.Length > 0) norms.Add(full);
-            if (core.Length > 0) norms.Add(core);
-            if (terminalNormalized.Length > 0) norms.Add(terminalNormalized);
-            if (cjkWhitespaceNormalized.Length > 0) norms.Add(cjkWhitespaceNormalized);
-
-            List<AuthorFolder> hits = new List<AuthorFolder>();
-            foreach (AuthorFolder folder in existing)
-            {
-                foreach (string n in norms)
-                {
-                    if (folder.DirectNorms.Contains(n))
-                    {
-                        hits.Add(folder);
-                        break;
-                    }
-                }
-            }
-            return UniqueFolders(hits);
-        }
 
         // role: 1 = society, 2 = creator, 3 = conservative name segment.
-        private static List<AuthorFolder> FindFoldersByRoleNorm(
-            string candidate,
-            List<AuthorFolder> existing,
-            int role)
-        {
-            HashSet<string> norms = new HashSet<string>(
-                AuthorRules.GetNorms(candidate),
-                StringComparer.OrdinalIgnoreCase);
-            List<AuthorFolder> hits = new List<AuthorFolder>();
 
-            foreach (AuthorFolder folder in existing)
-            {
-                HashSet<string> target =
-                    role == 1 ? folder.SocietyNorms :
-                    role == 2 ? folder.CreatorNorms :
-                    folder.SegmentNorms;
 
-                bool found = false;
-                foreach (string n in norms)
-                {
-                    if (target.Contains(n))
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                if (found) hits.Add(folder);
-            }
-            return UniqueFolders(hits);
-        }
-
-        private static List<AuthorFolder> FindSocietyFoldersForCandidate(
-            string candidate,
-            List<AuthorFolder> existing)
-        {
-            return UniqueFolders(
-                FindDirectFoldersForCandidate(candidate, existing),
-                FindFoldersByRoleNorm(candidate, existing, 1),
-                FindFoldersByRoleNorm(candidate, existing, 3));
-        }
-
-        private static List<AuthorFolder> FindCreatorFoldersForCandidate(
-            string candidate,
-            List<AuthorFolder> existing)
-        {
-            return UniqueFolders(
-                FindDirectFoldersForCandidate(candidate, existing),
-                FindFoldersByRoleNorm(candidate, existing, 2));
-        }
 
         private static AuthorMatchResult Result(AuthorMatchType type, AuthorFolder folder, string why)
         {
@@ -2275,18 +2229,6 @@ namespace MangaAuthorSorter
             return RecognitionEvidenceKind.None;
         }
 
-        private static List<AuthorFolder> FindFoldersForCandidate(string candidate, List<AuthorFolder> existing)
-        {
-            HashSet<string> norms = new HashSet<string>(AuthorRules.GetNorms(candidate), StringComparer.OrdinalIgnoreCase);
-            List<AuthorFolder> hits = new List<AuthorFolder>();
-            foreach (AuthorFolder folder in existing)
-            {
-                bool matched = false;
-                foreach (string n in folder.Norms) if (norms.Contains(n)) { matched = true; break; }
-                if (matched) hits.Add(folder);
-            }
-            return UniqueFolders(hits);
-        }
 
         private static List<AuthorFolder> FindFoldersForEntityMatch(
             AuthorEntityMatch entityMatch,
@@ -2308,31 +2250,6 @@ namespace MangaAuthorSorter
             return UniqueFolders(hits);
         }
 
-        private static List<AuthorFolder> FindCautiousFoldersForCandidate(string candidate, List<AuthorFolder> existing)
-        {
-            HashSet<string> norms = new HashSet<string>(
-                AuthorRules.GetCautiousNorms(candidate),
-                StringComparer.OrdinalIgnoreCase);
-            List<AuthorFolder> hits = new List<AuthorFolder>();
-
-            if (norms.Count == 0) return hits;
-
-            foreach (AuthorFolder folder in existing)
-            {
-                bool matched = false;
-                foreach (string n in folder.CautiousNorms)
-                {
-                    if (norms.Contains(n))
-                    {
-                        matched = true;
-                        break;
-                    }
-                }
-                if (matched) hits.Add(folder);
-            }
-
-            return UniqueFolders(hits);
-        }
 
         private static List<AuthorFolder> UniqueFolders(params List<AuthorFolder>[] lists)
         {

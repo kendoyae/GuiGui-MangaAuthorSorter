@@ -135,6 +135,9 @@ namespace MangaAuthorSorter
             public Regex Regex;
         }
 
+        private static readonly Lazy<List<CompiledRule>> DefaultCompiledRules =
+            new Lazy<List<CompiledRule>>(delegate { return CompileRules(GetDefaultRules()); });
+
         private readonly string _path;
         private readonly object _sync = new object();
         private List<TagCleaningRule> _cachedRules;
@@ -211,8 +214,7 @@ namespace MangaAuthorSorter
         public static bool MatchesDefaultRules(string text)
         {
             if (String.IsNullOrWhiteSpace(text)) return true;
-            List<CompiledRule> compiled = CompileRules(GetDefaultRules());
-            return MatchesCompiled(text, compiled);
+            return MatchesCompiled(text, DefaultCompiledRules.Value);
         }
 
         public static List<TagCleaningRule> GetDefaultRules()

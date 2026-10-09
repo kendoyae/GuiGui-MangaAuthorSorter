@@ -27,6 +27,13 @@ if not exist "Build\CompilerSources.rsp" (
 
 if not exist "bin\Release" mkdir "bin\Release"
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "Build\ValidateSources.ps1"
+if errorlevel 1 (
+    echo [ERROR] C# source validation failed.
+    if not defined NO_PAUSE pause
+    exit /b 1
+)
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "Build\ValidateLanguages.ps1"
 if errorlevel 1 (
     echo [ERROR] Language validation failed.
@@ -50,6 +57,7 @@ echo Building GuiGui.exe...
  /resource:"Docs\Changelog.en-US.md",MangaAuthorSorter.Docs.Changelog.en-US.md ^
  /resource:"Docs\Changelog.de-DE.md",MangaAuthorSorter.Docs.Changelog.de-DE.md ^
  /resource:"LICENSE_NOTICES.txt",MangaAuthorSorter.LicenseNotices.txt ^
+ /resource:"SourcesConfig.json",MangaAuthorSorter.SourcesConfig.json ^
  /reference:System.dll ^
  /reference:System.Core.dll ^
  /reference:System.Drawing.dll ^

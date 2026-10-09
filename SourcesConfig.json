@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "revision": 3,
+  "refreshHours": 24,
+  "sources": [
+    {
+      "id": "nh-metadata-archive",
+      "name": "nh-metadata-archive",
+      "enabled": true,
+      "type": "github-monthly-csv",
+      "repository": "van-geaux/nh-metadata-archive",
+      "branch": "main",
+      "pathPrefix": "by_month/",
+      "fileSuffix": ".csv",
+      "checkIntervalHours": 24
+    }
+  ],
+  "publicDatabase": {
+    "manifestUrl": ""
+  },
+  "advancedSources": [
+    {
+      "id": "eh-current",
+      "enabled": true,
+      "repository": "URenko/e-hentai-db",
+      "releaseTag": "nightly",
+      "assetName": "e-hentai.db.zstd"
+    },
+    {
+      "id": "eh-tag-aggregate",
+      "enabled": true,
+      "repository": "EhTagTranslation/EhTagDb",
+      "releaseTag": "latest",
+      "assetName": "aggregated.sqlite.gz"
+    }
+  ]
+}

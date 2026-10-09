@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -11,6 +11,8 @@ namespace MangaAuthorSorter
         public DateTime Time;
         public bool WarmupEnabled, EverythingEnabled, WarmupHit, ReadyBeforeRequest, SnapshotHit;
         public string Provider = "";
+        public string StartupInitializationStages = "";
+        public string StartupUiTrace = "";
         public long WarmupWaitMs, SnapshotPrepareMs, FileDiscoveryMs;
         public long ProviderQueryMs, IndexReconcileMs;
         public long PlanCacheReadMs, PlanCacheWriteMs, FinalizeMs;
@@ -24,6 +26,36 @@ namespace MangaAuthorSorter
         public long DestinationCacheHits, DestinationCacheMisses;
         public int IndexCacheHits, IndexAdded, IndexRemoved, IndexModified, IndexMoved, IndexRenamed;
         public int PlanCacheHits, RecalculatedFiles;
+        public long StartupRestoreMs = -1, BackgroundValidationMs = -1;
+        public long DiscoverySetMs = -1, DiscoveryEnumerateMs = -1, DiscoveryCompareMs = -1;
+        public long SdkPrepareMs = -1, EverythingWaitMs = -1, EverythingReadMs = -1, DiscoveryCheckMs = -1;
+        public int EverythingQueryCount = -1;
+        public long FirstInteractiveMs = -1, StartupWindowShownMs = -1;
+        public int ActualRecognitions = -1;
+    }
+
+    // All points and intervals use the form's one monotonic clock. Intervals
+    // may nest; consumers must not sum them with their parent intervals.
+    internal sealed class StartupUiTrace
+    {
+        private readonly System.Diagnostics.Stopwatch _clock;
+        private readonly Dictionary<string, long> _values = new Dictionary<string, long>();
+        public StartupUiTrace(System.Diagnostics.Stopwatch clock) { _clock = clock; }
+        public long Now { get { return _clock.ElapsedTicks; } }
+        public void Point(string key) { if (!_values.ContainsKey(key)) _values[key] = Now; }
+        public void Interval(string key, long start)
+        { long previous; _values.TryGetValue(key, out previous); _values[key] = previous + Now - start; }
+        public void Duration(string key, long ticks) { _values[key] = ticks; }
+        public void PointAt(string key, long ticks) { if (!_values.ContainsKey(key)) _values[key] = ticks; }
+        public long Milliseconds(string key)
+        { long value; return _values.TryGetValue(key, out value) ? value * 1000 / System.Diagnostics.Stopwatch.Frequency : -1; }
+        public string Export()
+        {
+            List<string> values = new List<string>();
+            foreach (string key in _values.Keys)
+                values.Add(key + ":" + Milliseconds(key).ToString(CultureInfo.InvariantCulture));
+            return String.Join(";", values);
+        }
     }
 
     internal sealed class ScanWarmupStatusEntry
@@ -33,11 +65,11 @@ namespace MangaAuthorSorter
         public string Provider = "";
         public string Stage = "";
         public string Error = "";
-        public int CandidateCount;
-        public long FileDiscoveryMs, TargetIndexMs, SnapshotPrepareMs;
-        public long ParsedCacheHits, ParsedCacheMisses;
-        public long RecognitionCacheHits, RecognitionCacheMisses;
-        public long DestinationCacheHits, DestinationCacheMisses;
+        public int CandidateCount = -1;
+        public long FileDiscoveryMs = -1, TargetIndexMs = -1, SnapshotPrepareMs = -1;
+        public long ParsedCacheHits = -1, ParsedCacheMisses = -1;
+        public long RecognitionCacheHits = -1, RecognitionCacheMisses = -1;
+        public long DestinationCacheHits = -1, DestinationCacheMisses = -1;
     }
 
     internal static class ScanPerformanceDiagnostics
@@ -46,7 +78,6 @@ namespace MangaAuthorSorter
         private static readonly object Gate = new object();
         private static readonly List<ScanPerformanceEntry> Entries = new List<ScanPerformanceEntry>();
         private static bool _enabled;
-        private static bool _warmupEnabled = true;
         private static bool _everythingEnabled = true;
         private static string _logPath = "";
         private static ScanWarmupStatusEntry _lastWarmupStatus;
@@ -56,9 +87,8 @@ namespace MangaAuthorSorter
         public static event Action SettingsChanged;
         public static bool WarmupEnabled
         {
-            get { lock (Gate) return _warmupEnabled; }
-            set { bool changed; lock (Gate) { changed = _warmupEnabled != value; _warmupEnabled = value; }
-                if (changed && SettingsChanged != null) SettingsChanged(); }
+            get { return true; }
+            set { /* Legacy setting retained for source compatibility. Preparation is automatic. */ }
         }
         public static bool EverythingEnabled
         {
@@ -77,7 +107,7 @@ namespace MangaAuthorSorter
         {
             lock (Gate)
             {
-                _logPath = logPath ?? ""; _enabled = enabled; _warmupEnabled = warmupEnabled;
+                _logPath = logPath ?? ""; _enabled = enabled;
                 _everythingEnabled = everythingEnabled;
                 _lastWarmupStatus = null;
                 Entries.Clear();
@@ -146,6 +176,7 @@ namespace MangaAuthorSorter
                 { if (File.Exists(_logPath) && new FileInfo(_logPath).Length > 0) text.AppendLine(); text.AppendLine("#" + FormatVersion); text.AppendLine("#UNIT=ms; zero-duration fields omitted"); }
                 text.Append(e.Time.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture));
                 Pair(text, "P", ProviderCode(e.Provider)); Pair(text, "H", B(e.WarmupHit)); Pair(text, "RB", B(e.ReadyBeforeRequest)); Pair(text, "SH", B(e.SnapshotHit));
+                Pair(text, "E", B(e.EverythingEnabled));
                 PositivePair(text, "WW", e.WarmupWaitMs); PositivePair(text, "SP", e.SnapshotPrepareMs); PositivePair(text, "FD", e.FileDiscoveryMs);
                 PositivePair(text, "FQ", e.ProviderQueryMs); PositivePair(text, "FS", e.IndexReconcileMs);
                 PositivePair(text, "PCR", e.PlanCacheReadMs); PositivePair(text, "PCW", e.PlanCacheWriteMs);
@@ -166,6 +197,21 @@ namespace MangaAuthorSorter
                 Pair(text, "ID", e.IndexRemoved.ToString(CultureInfo.InvariantCulture)); Pair(text, "IM", e.IndexModified.ToString(CultureInfo.InvariantCulture));
                 Pair(text, "IV", e.IndexMoved.ToString(CultureInfo.InvariantCulture)); Pair(text, "IR", e.IndexRenamed.ToString(CultureInfo.InvariantCulture));
                 Pair(text, "PC", e.PlanCacheHits.ToString(CultureInfo.InvariantCulture)); Pair(text, "RC", e.RecalculatedFiles.ToString(CultureInfo.InvariantCulture));
+                if (e.StartupRestoreMs >= 0) Pair(text, "SR", e.StartupRestoreMs.ToString(CultureInfo.InvariantCulture));
+                if (e.BackgroundValidationMs >= 0) Pair(text, "BV", e.BackgroundValidationMs.ToString(CultureInfo.InvariantCulture));
+                if (e.EverythingQueryCount >= 0) Pair(text, "EQ", e.EverythingQueryCount.ToString(CultureInfo.InvariantCulture));
+                if (e.FirstInteractiveMs >= 0) Pair(text, "FI", e.FirstInteractiveMs.ToString(CultureInfo.InvariantCulture));
+                if (e.StartupWindowShownMs >= 0) Pair(text, "WS", e.StartupWindowShownMs.ToString(CultureInfo.InvariantCulture));
+                if (!String.IsNullOrEmpty(e.StartupInitializationStages)) Pair(text, "SI", e.StartupInitializationStages);
+                if (!String.IsNullOrEmpty(e.StartupUiTrace)) Pair(text, "SU", e.StartupUiTrace);
+                if (e.ActualRecognitions >= 0) Pair(text, "AR", e.ActualRecognitions.ToString(CultureInfo.InvariantCulture));
+                if (e.SdkPrepareMs >= 0) Pair(text, "SP", e.SdkPrepareMs.ToString(CultureInfo.InvariantCulture));
+                if (e.EverythingWaitMs >= 0) Pair(text, "EW", e.EverythingWaitMs.ToString(CultureInfo.InvariantCulture));
+                if (e.EverythingReadMs >= 0) Pair(text, "ER", e.EverythingReadMs.ToString(CultureInfo.InvariantCulture));
+                if (e.DiscoveryCheckMs >= 0) Pair(text, "DC", e.DiscoveryCheckMs.ToString(CultureInfo.InvariantCulture));
+                if (e.DiscoverySetMs >= 0) Pair(text, "DS", e.DiscoverySetMs.ToString(CultureInfo.InvariantCulture));
+                if (e.DiscoveryEnumerateMs >= 0) Pair(text, "DN", e.DiscoveryEnumerateMs.ToString(CultureInfo.InvariantCulture));
+                if (e.DiscoveryCompareMs >= 0) Pair(text, "DCM", e.DiscoveryCompareMs.ToString(CultureInfo.InvariantCulture));
                 PositivePair(text, "TR", e.TotalResponseMs); Pair(text, "C", e.CandidateCount.ToString(CultureInfo.InvariantCulture)); Pair(text, "R", e.ResultCount.ToString(CultureInfo.InvariantCulture)); text.AppendLine();
                 File.AppendAllText(_logPath, text.ToString(), new UTF8Encoding(false));
             }
@@ -201,7 +247,7 @@ namespace MangaAuthorSorter
                     DateTime time; if (!DateTime.TryParseExact(v[0], "yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture, DateTimeStyles.None, out time)) continue;
                     Dictionary<string, string> fields = new Dictionary<string, string>(StringComparer.Ordinal);
                     for (int i = 1; i < v.Length; i++) { int split = v[i].IndexOf('='); if (split > 0) fields[v[i].Substring(0, split)] = v[i].Substring(split + 1); }
-                    ScanPerformanceEntry entry = new ScanPerformanceEntry { Time = time, WarmupEnabled = GetBool(fields, "H") || GetBool(fields, "RB"), EverythingEnabled = Get(fields, "P") == "ESDK",
+                    ScanPerformanceEntry entry = new ScanPerformanceEntry { Time = time, WarmupEnabled = GetBool(fields, "H") || GetBool(fields, "RB"), EverythingEnabled = fields.ContainsKey("E") ? GetBool(fields, "E") : Get(fields, "P") == "ESDK",
                         Provider = Get(fields, "P") == "ESDK" ? "Everything SDK" : "FileSystem", WarmupHit = GetBool(fields, "H"), ReadyBeforeRequest = GetBool(fields, "RB"), SnapshotHit = GetBool(fields, "SH"),
                         WarmupWaitMs = GetLong(fields, "WW"), SnapshotPrepareMs = GetLong(fields, "SP"), FileDiscoveryMs = GetLong(fields, "FD"),
                         ProviderQueryMs = GetLong(fields, "FQ"), IndexReconcileMs = GetLong(fields, "FS"),
@@ -220,6 +266,21 @@ namespace MangaAuthorSorter
                         IndexCacheHits = (int)GetLong(fields, "IC"), IndexAdded = (int)GetLong(fields, "IA"), IndexRemoved = (int)GetLong(fields, "ID"),
                         IndexModified = (int)GetLong(fields, "IM"), IndexMoved = (int)GetLong(fields, "IV"), IndexRenamed = (int)GetLong(fields, "IR"),
                         PlanCacheHits = (int)GetLong(fields, "PC"), RecalculatedFiles = (int)GetLong(fields, "RC"),
+                        StartupRestoreMs = fields.ContainsKey("SR") ? GetLong(fields, "SR") : -1,
+                        BackgroundValidationMs = fields.ContainsKey("BV") ? GetLong(fields, "BV") : -1,
+                        EverythingQueryCount = fields.ContainsKey("EQ") ? (int)GetLong(fields, "EQ") : -1,
+                        FirstInteractiveMs = fields.ContainsKey("FI") ? GetLong(fields, "FI") : -1,
+                        StartupWindowShownMs = fields.ContainsKey("WS") ? GetLong(fields, "WS") : -1,
+                        StartupInitializationStages = Get(fields, "SI"),
+                        StartupUiTrace = Get(fields, "SU"),
+                        ActualRecognitions = fields.ContainsKey("AR") ? (int)GetLong(fields, "AR") : -1,
+                        SdkPrepareMs = fields.ContainsKey("SP") ? GetLong(fields, "SP") : -1,
+                        EverythingWaitMs = fields.ContainsKey("EW") ? GetLong(fields, "EW") : -1,
+                        EverythingReadMs = fields.ContainsKey("ER") ? GetLong(fields, "ER") : -1,
+                        DiscoveryCheckMs = fields.ContainsKey("DC") ? GetLong(fields, "DC") : -1,
+                        DiscoverySetMs = fields.ContainsKey("DS") ? GetLong(fields, "DS") : -1,
+                        DiscoveryEnumerateMs = fields.ContainsKey("DN") ? GetLong(fields, "DN") : -1,
+                        DiscoveryCompareMs = fields.ContainsKey("DCM") ? GetLong(fields, "DCM") : -1,
                         CandidateCount = (int)GetLong(fields, "C"), ResultCount = (int)GetLong(fields, "R") };
                     Entries.Add(entry);
                     if (Entries.Count > 1000) Entries.RemoveAt(0);

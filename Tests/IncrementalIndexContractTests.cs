@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace MangaAuthorSorter.Tests
 {
@@ -43,6 +45,110 @@ namespace MangaAuthorSorter.Tests
                     Detail = "contract"
                 };
             }
+        }
+
+        private sealed class LaggingSdkProvider : IFileSystemIndexProvider
+        {
+            public int Calls;
+            public string ProviderId { get { return "LaggingSDK"; } }
+            public bool IsAvailable { get { return true; } }
+            public SearchResult SearchFiles(string source, bool recursive, int limit, HashSet<string> blocked,
+                IEnumerable<string> extensions, Action<ScanProgressInfo> progress, Func<bool> canceled)
+            {
+                Calls++;
+                List<FileInfo> files = Directory.EnumerateFiles(source, "*.zip").Take(1).Select(x => new FileInfo(x)).ToList();
+                return new SearchResult { Files = files, IndexFiles = files, Backend = "Everything SDK", EverythingQueryCount = 1,
+                    IndexEntries = files.Select(x => new SourceIndexFileSnapshot { FullPath = x.FullName, DirectoryPath = source,
+                        FileName = x.Name, Extension = x.Extension, FileSize = x.Length, LastWriteTimeUtc = x.LastWriteTimeUtc }).ToList() };
+            }
+        }
+
+        private static void ColdSdkLagCannotOmitFiles(string root)
+        {
+            string source = Path.Combine(root, "sdk-lag"); Directory.CreateDirectory(source);
+            File.WriteAllText(Path.Combine(source, "one.zip"), "one"); File.WriteAllText(Path.Combine(source, "two.zip"), "two");
+            LaggingSdkProvider sdk = new LaggingSdkProvider(); CountingProvider native = new CountingProvider();
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(Path.Combine(root, "sdk-lag.db")))
+            {
+                db.Open();
+                using (PersistentSourceIndexProvider provider = new PersistentSourceIndexProvider(new FileSystemIndexProviderRouter(sdk, native), db))
+                {
+                    SearchResult result = provider.SearchFiles(source, false, 0, new HashSet<string>(), new[] { ".zip" }, null, null);
+                    Assert(result.Files.Count == 2 && sdk.Calls == 1 && native.Calls == 1 && result.EverythingQueryCount == 1,
+                        "cold SDK lag must reconcile missing names without another Everything query");
+                    result = provider.SearchFiles(source, false, 0, new HashSet<string>(), new[] { ".zip" }, null, null);
+                    Assert(result.Files.Count == 2 && sdk.Calls == 1 && native.Calls == 1 && result.EverythingQueryCount == 0,
+                        "the corrected monitored snapshot must be reusable");
+                }
+            }
+            Console.WriteLine("[PASS] Cold Everything index lag cannot omit existing files; one SDK query, one necessary native fallback, then shared reuse.");
+        }
+
+        private static void RecognitionVersionCacheTracksContent(string root)
+        {
+            string path = Path.Combine(root, "recognition-version.json");
+            File.WriteAllText(path, "{\"SchemaVersion\":3,\"Authors\":[{\"Id\":1,\"CanonicalName\":\"Alpha\"}]}");
+            AuthorEntityStore store = new AuthorEntityStore(path);
+            string alias = store.GetRecognitionVersion(true), entity = store.GetRecognitionVersion(false);
+            Assert(store.GetRecognitionVersion(false) == entity && store.GetRecognitionVersion(true) == alias,
+                "unchanged content must retain semantic versions");
+            DateTime timestamp = File.GetLastWriteTimeUtc(path);
+            File.WriteAllText(path, File.ReadAllText(path).Replace("Alpha", "Bravo"));
+            File.SetLastWriteTimeUtc(path, timestamp);
+            Assert(store.GetRecognitionVersion(false) != entity && store.GetRecognitionVersion(true) == alias,
+                "same-size, same-timestamp external edits must change only affected recognition versions");
+            File.WriteAllText(path, "invalid JSON");
+            bool rejected = false;
+            try { store.GetRecognitionVersion(false); } catch { rejected = true; }
+            Assert(rejected, "invalid changed content cannot silently retain a cached recognition fingerprint");
+            Console.WriteLine("[PASS] Recognition fingerprint reuse detects equal-size external edits with preserved timestamps and rejects malformed data.");
+        }
+
+        private static void ScopeEnumerationPreservesNames(string root)
+        {
+            string source = Path.Combine(root, "scope-names");
+            Directory.CreateDirectory(source);
+            string nested = Path.Combine(source, "nested"); Directory.CreateDirectory(nested);
+            Directory.CreateDirectory(Path.Combine(source, "empty"));
+            File.WriteAllText(Path.Combine(source, "one.zip"), "one");
+            File.WriteAllText(Path.Combine(source, "ignored.txt"), "ignored");
+            File.WriteAllText(Path.Combine(nested, "two.ZIP"), "two");
+            HashSet<string> extensions = new HashSet<string>(new[] { "zip" }, StringComparer.OrdinalIgnoreCase);
+            foreach (bool recursive in new[] { false, true })
+            {
+                HashSet<string> expected = new HashSet<string>(Directory.EnumerateFiles(source, "*",
+                    recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
+                    .Where(x => String.Equals(Path.GetExtension(x), ".zip", StringComparison.OrdinalIgnoreCase)), StringComparer.OrdinalIgnoreCase);
+                Assert(expected.SetEquals(ScopeFileNames.Enumerate(source, recursive, extensions, null)),
+                    "scope enumeration must preserve recursive scope, mixed-case extensions and empty folders");
+            }
+            bool canceled = false;
+            try { ScopeFileNames.Enumerate(source, true, extensions, () => true).ToList(); }
+            catch (OperationCanceledException) { canceled = true; }
+            Assert(canceled, "scope validation must honor cancellation");
+            File.Delete(Path.Combine(source, "one.zip"));
+            File.Move(Path.Combine(nested, "two.ZIP"), Path.Combine(source, "renamed.zip"));
+            Assert(ScopeFileNames.Enumerate(source, true, extensions, null).Single() == Path.Combine(source, "renamed.zip"),
+                "scope enumeration cannot reuse names after rename and deletion");
+            Console.WriteLine("[PASS] Scope enumeration preserves names, depth, exclusions, empty directories, cancellation and file changes.");
+        }
+
+        private static void IndexedTimestampOrderingDoesNotReadDisk(string root)
+        {
+            FileInfo old = new FileInfo(Path.Combine(root, "absent-old.zip"));
+            FileInfo latest = new FileInfo(Path.Combine(root, "absent-new.zip"));
+            FileInfo same = new FileInfo(Path.Combine(root, "absent-same.zip"));
+            FileInfo unknown = new FileInfo(Path.Combine(root, "absent-unknown.zip"));
+            DateTime now = DateTime.UtcNow;
+            Dictionary<string, DateTime> timestamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+            timestamps[old.FullName] = now.AddDays(-1);
+            timestamps[latest.FullName] = now;
+            timestamps[same.FullName] = now;
+            List<FileInfo> ordered = EverythingService.OrderByIndexedModificationTime(
+                new[] { old, latest, same, unknown }, timestamps);
+            Assert(ordered.SequenceEqual(new[] { latest, same, old, unknown }),
+                "latest-first ordering must use SDK timestamps even for nonexistent files; ties stable, missing last");
+            Console.WriteLine("[PASS] Latest-first SDK result ordering uses indexed timestamps without physical file reads.");
         }
 
         private static void UnifiedAliasMigrationIsSafe(string root)
@@ -86,6 +192,16 @@ namespace MangaAuthorSorter.Tests
             try
             {
                 UnifiedAliasMigrationIsSafe(testRoot);
+                SharedDiscoveryReusesOneQuery(testRoot);
+                MetadataChangesPreserveRecognition(testRoot);
+                LargeCacheRecoveryBenchmark(testRoot);
+                CorruptCacheIsPreservedAndRebuilt(testRoot);
+                TagRuleChangesInvalidateOnlyDependentCaches(testRoot);
+                ColdSdkLagCannotOmitFiles(testRoot);
+                IndexedTimestampOrderingDoesNotReadDisk(testRoot);
+                ScopeEnumerationPreservesNames(testRoot);
+                RecognitionVersionCacheTracksContent(testRoot);
+                CacheWritesAndUnrelatedFilesDoNotInvalidateDiscovery(testRoot);
                 Console.WriteLine("[PASS] Unified aliases: safe and idempotent migration, overlap isolation, durable edits, external-change detection and failed-write rollback.");
                 PerformanceHistoryPreservesSelectedDetailsAfterRestart(testRoot);
                 Console.WriteLine("[PASS] GL4 history reload retains all metrics; newer warmup cannot override selected records; clearing persists.");
@@ -106,6 +222,9 @@ namespace MangaAuthorSorter.Tests
                 IndexedMetadataSnapshotAvoidsPhysicalFileRead(testRoot);
                 Console.WriteLine("[PASS] Provider metadata can reconcile FileIndex without physical file metadata reads.");
                 BulkPlanUpsertUpdatesOnlyChangedRows(testRoot);
+                ScanSettingsSurviveRestart(testRoot);
+                RestoredPreviewSkipsOnlyUnchangedRows();
+                StartupTranslationsUpgradeOldLanguagePacks(testRoot);
                 Console.WriteLine("[PASS] Batch SQLite plan cache upsert preserves all rows and partial updates.");
                 PlanCacheWritePolicyAvoidsRewritingCacheHits();
                 Console.WriteLine("[PASS] Unchanged plan cache hits cannot trigger any SQLite plan write.");
@@ -127,6 +246,196 @@ namespace MangaAuthorSorter.Tests
             finally
             {
                 try { Directory.Delete(testRoot, true); } catch { }
+            }
+        }
+
+        private static void CacheWritesAndUnrelatedFilesDoNotInvalidateDiscovery(string root)
+        {
+            string source = Path.Combine(root, "cache-in-source"); Directory.CreateDirectory(source);
+            File.WriteAllText(Path.Combine(source, "book.zip"), "test");
+            CountingProvider inner = new CountingProvider();
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(Path.Combine(source, "cache.db")))
+            {
+                db.Open();
+                using (PersistentSourceIndexProvider provider = new PersistentSourceIndexProvider(inner, db))
+                {
+                    provider.SearchFiles(source, false, 0, new HashSet<string>(), new[] { ".zip" }, null, null);
+                    long revision = provider.SnapshotRevision;
+                    db.MarkClean();
+                    File.WriteAllText(Path.Combine(source, "settings.txt"), "unrelated");
+                    File.Move(Path.Combine(source, "settings.txt"), Path.Combine(source, "renamed-settings.txt"));
+                    Thread.Sleep(100);
+                    provider.SearchFiles(source, false, 0, new HashSet<string>(), new[] { ".zip" }, null, null);
+                    Assert(inner.Calls == 1 && provider.SnapshotRevision == revision,
+                        "cache journals and unrelated settings changes must not trigger repeated discovery");
+                    SearchResult all = provider.SearchFiles(source, false, 0, new HashSet<string>(), new[] { ".zip", ".db" }, null, null);
+                    Assert(all.Files.Count == 1 && all.Files.All(x => x.Name != "cache.db"), "the source index must never expose its own database for archiving");
+                    long scoped = provider.GetSnapshotRevision(source, false, new HashSet<string>(), new[] { ".zip" });
+                    string other = Path.Combine(root, "other-source"); Directory.CreateDirectory(other);
+                    string otherFile = Path.Combine(other, "other.zip"); File.WriteAllText(otherFile, "other");
+                    provider.SearchFiles(other, false, 0, new HashSet<string>(), new[] { ".zip" }, null, null);
+                    long otherRevision = provider.GetSnapshotRevision(other, false, new HashSet<string>(), new[] { ".zip" });
+                    File.AppendAllText(otherFile, "changed");
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(3);
+                    while (provider.GetSnapshotRevision(other, false, new HashSet<string>(), new[] { ".zip" }) == otherRevision && DateTime.UtcNow < deadline) Thread.Sleep(10);
+                    Assert(provider.GetSnapshotRevision(other, false, new HashSet<string>(), new[] { ".zip" }) > otherRevision &&
+                        provider.GetSnapshotRevision(source, false, new HashSet<string>(), new[] { ".zip" }) == scoped,
+                        "inactive roots must not supersede validation of an unchanged active context");
+                }
+            }
+            Console.WriteLine("[PASS] Cache writes and unrelated files cannot create validation loops; the database is excluded from its own scan.");
+        }
+
+        private static void TagRuleChangesInvalidateOnlyDependentCaches(string root)
+        {
+            string source = Path.Combine(root, "tag-cache"); Directory.CreateDirectory(source);
+            string path = Path.Combine(source, "[Author] Tags.zip"); File.WriteAllText(path, "test");
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(Path.Combine(root, "tag-cache.db")))
+            {
+                db.Open(); long id = db.EnsureRoot("Source", source, "ContractFake");
+                db.ReplaceSourceSnapshot(id, source, "ContractFake", new[] { new FileInfo(path) });
+                long fileId = db.LoadSourceFiles(id)[path].FileId;
+                ParsedMetadataCacheService parsed = new ParsedMetadataCacheService(db, "tags-v1");
+                parsed.StoreAuthorCandidates(path, Path.GetFileName(path), new[] { "Author" }); parsed.Flush();
+                RecognitionFactCacheService recognized = new RecognitionFactCacheService(db, "aliases", "entities", "public", "rules|Tag=tags-v1");
+                recognized.Store(new PlanItem { SourcePath = path, FileName = Path.GetFileName(path), Author = "Author", StatusCode = PlanStatusCode.Matched });
+                recognized.Flush();
+                List<string> candidates; RecognitionCacheEntry fact;
+                Assert(parsed.TryGetAuthorCandidates(path, Path.GetFileName(path), out candidates) &&
+                    recognized.TryGet(path, Path.GetFileName(path), out fact), "baseline parser and recognition facts should be valid");
+                parsed.UpdateTagCleaningVersion("tags-v2"); recognized.UpdateRuleVersion("rules|Tag=tags-v2");
+                Assert(!parsed.TryGetAuthorCandidates(path, Path.GetFileName(path), out candidates) &&
+                    !recognized.TryGet(path, Path.GetFileName(path), out fact), "tag edits must invalidate both parsing and downstream recognition");
+                Assert(db.LoadSourceFiles(id)[path].FileId == fileId && db.LoadParsedMetadata().Count == 1 && db.LoadRecognitionCache().Count == 1,
+                    "dependency invalidation must preserve file identities and legacy cache rows");
+            }
+            Console.WriteLine("[PASS] Tag-rule fingerprints invalidate parsing and recognition lazily without deleting the file index or old cache rows.");
+        }
+
+        private static void CorruptCacheIsPreservedAndRebuilt(string root)
+        {
+            string path = Path.Combine(root, "corrupt.db"); File.WriteAllText(path, "corrupt cache fixture");
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(path))
+            {
+                db.Open(); CheckCacheRebuilt(db, root);
+            }
+            string[] backups = Directory.GetFiles(root, "corrupt.db.corrupt-*");
+            Assert(backups.Length == 1 && File.ReadAllText(backups[0]) == "corrupt cache fixture", "corrupt cache must be preserved byte-for-byte");
+            FileIndexCacheDatabase disposed = new FileIndexCacheDatabase(Path.Combine(root, "disposed.db"));
+            disposed.Open(); disposed.Dispose(); bool rejected = false;
+            try { disposed.LoadDisplayedSession(); } catch (ObjectDisposedException) { rejected = true; }
+            Assert(rejected, "late restoration must not reopen a database after window shutdown");
+            Console.WriteLine("[PASS] Corrupt cache is preserved and rebuilt; disposed databases reject late background access.");
+        }
+
+        private static void CheckCacheRebuilt(FileIndexCacheDatabase db, string root)
+        {
+            long id = db.EnsureRoot("Source", root, "ContractFake");
+            Assert(id > 0 && db.LoadSourceFiles(id).Count == 0, "rebuilt cache must be usable and empty");
+        }
+
+        private static void SharedDiscoveryReusesOneQuery(string root)
+        {
+            string source = Path.Combine(root, "shared-discovery"); Directory.CreateDirectory(source);
+            File.WriteAllText(Path.Combine(source, "book.zip"), "test");
+            CountingProvider inner = new CountingProvider();
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(Path.Combine(root, "shared.db")))
+            {
+                db.Open();
+                using (PersistentSourceIndexProvider provider = new PersistentSourceIndexProvider(inner, db))
+                {
+                    Func<SearchResult> query = delegate { return provider.SearchFiles(source, true, 0,
+                        new HashSet<string>(), new[] { ".zip" }, null, null); };
+                    Task<SearchResult>[] requests = Enumerable.Range(0, 4).Select(i => Task.Run(query)).ToArray();
+                    Task.WaitAll(requests);
+                    Assert(inner.Calls == 1 && requests.All(x => x.Result.Files.Count == 1),
+                        "concurrent matching requests must share discovery and reconciliation");
+                    using (ScanWarmupService preparation = new ScanWarmupService(provider))
+                    {
+                        ScanWarmupMetrics metrics;
+                        SearchResult reused = preparation.GetOrRunSource(new ScanWarmupRequest {
+                            Source = source, Recursive = true, Extensions = new List<string> { ".zip" }
+                        }, null, null, out metrics);
+                        Assert(inner.Calls == 1 && metrics.WarmupHit && reused.EverythingQueryCount == 0,
+                            "automatic preparation must delegate snapshot validity to the index");
+                    }
+                }
+            }
+            Console.WriteLine("[PASS] Concurrent requests and preparation share one discovery; cached projections perform zero Everything queries.");
+        }
+
+        private static void MetadataChangesPreserveRecognition(string root)
+        {
+            string path = Path.Combine(root, "[Author] Metadata.zip");
+            PlanItem item = new PlanItem { SourcePath = path, FileName = Path.GetFileName(path),
+                Author = "Author", TargetPath = "target.zip", RecognitionScore = 100,
+                ManualTargetAuthor = "Confirmed" };
+            SourceIndexFileSnapshot metadata = new SourceIndexFileSnapshot {
+                FullPath = path, FileSize = 4096, LastWriteTimeUtc = DateTime.UtcNow
+            };
+            FileIndexDelta delta = new FileIndexDelta { Modified = 1 };
+            delta.PlanInvalidatedPaths.Add(path);
+            Assert(MainForm.TryRefreshPlanMetadata(item, new FileInfo(path), metadata, delta),
+                "provider metadata must update the plan without parsing or reading a nonexistent file");
+            Assert(item.FileSize == 4096 && item.Author == "Author" && item.TargetPath == "target.zip" &&
+                item.RecognitionScore == 100 && item.ManualTargetAuthor == "Confirmed", "metadata refresh changed recognition or confirmation");
+            delta.RecognitionInvalidatedPaths.Add(path);
+            Assert(!MainForm.TryRefreshPlanMetadata(item, new FileInfo(path), metadata, delta),
+                "recognition-invalidated rows must not take the metadata shortcut");
+            delta.RecognitionInvalidatedPaths.Clear();
+            delta.PathChanges.Add(new FileIndexPathChange { OldPath = path, NewPath = path + ".renamed" });
+            Assert(!MainForm.TryRefreshPlanMetadata(item, new FileInfo(path), metadata, delta),
+                "moved or renamed rows require downstream replanning");
+            Console.WriteLine("[PASS] Metadata-only changes preserve recognition, target and manual confirmation; rename/rule invalidations bypass the shortcut.");
+        }
+
+        private static void LargeCacheRecoveryBenchmark(string root)
+        {
+            string source = Path.Combine(root, "large-cache"); Directory.CreateDirectory(source);
+            List<SourceIndexFileSnapshot> entries = Enumerable.Range(0, 8490).Select(i => new SourceIndexFileSnapshot {
+                FullPath = Path.Combine(source, "[Author] " + i + ".zip"), DirectoryPath = source,
+                FileName = "[Author] " + i + ".zip", Extension = ".zip", FileSize = 1024,
+                LastWriteTimeUtc = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc)
+            }).ToList();
+            string dbPath = Path.Combine(root, "large-cache.db");
+            const string scope = "CanonicalRecursive=True|Extensions=.zip";
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(dbPath))
+            {
+                db.Open(); long id = db.EnsureRoot("Source", source, "ContractFake");
+                db.ReplaceSourceSnapshot(id, source, "ContractFake", entries, scope);
+                Dictionary<string, SourceFileIndexEntry> indexed = db.LoadSourceFiles(id);
+                using (PersistentSourceIndexProvider provider = new PersistentSourceIndexProvider(new CountingProvider(), db))
+                {
+                    ScanSessionSnapshot session = provider.StartScanSession(source, new SearchResult {
+                        Files = entries.Select(x => new FileInfo(x.FullPath)).ToList()
+                    }, 0).ScanSession;
+                    List<PlanItem> plans = entries.Select(x => new PlanItem { FileId = indexed[x.FullPath].FileId,
+                        SourcePath = x.FullPath, FileName = x.FileName, FileSize = x.FileSize,
+                        LastWriteTime = x.LastWriteTimeUtc.ToLocalTime(), Author = "Author", TargetPath = "target.zip" }).ToList();
+                    db.UpsertMigrationPlans("benchmark", plans); db.SaveDisplayedSession(session);
+                    Stopwatch timer = Stopwatch.StartNew();
+                    FileIndexDelta unchanged = db.ReplaceSourceSnapshot(id, source, "ContractFake", entries, scope);
+                    timer.Stop(); long validationMs = timer.ElapsedMilliseconds;
+                    Assert(unchanged.CacheHits == 8490 && unchanged.Modified == 0 && unchanged.Added == 0 && unchanged.Removed == 0,
+                        "8490 unchanged entries must reuse all indexed rows");
+                    timer.Restart();
+                    List<PlanItem> loaded = db.LoadMigrationPlans("benchmark", session);
+                    timer.Stop();
+                    Assert(loaded.Count == 8490 && loaded.All(x => x.Author == "Author"), "large cache restoration lost recognition");
+                    Console.WriteLine("[BENCH] 8490 synthetic entries: reconciliation=" + validationMs +
+                        " ms; plan read=" + timer.ElapsedMilliseconds + " ms; reused=8490; recognition=0 (cache read only).");
+                    entries[0].FileSize++;
+                    FileIndexDelta changed = db.ReplaceSourceSnapshot(id, source, "ContractFake", entries, scope);
+                    Assert(changed.Modified == 1 && changed.CacheHits == 8489, "large cache must isolate one metadata change");
+                    entries.RemoveAt(1);
+                    changed = db.ReplaceSourceSnapshot(id, source, "ContractFake", entries, scope);
+                    Assert(changed.Removed == 1 && changed.CacheHits == 8489, "large cache must isolate one deletion");
+                }
+            }
+            using (FileIndexCacheDatabase db = new FileIndexCacheDatabase(dbPath))
+            {
+                db.Open();
+                Assert(db.LoadDisplayedSession() != null, "last displayed session must survive reopening SQLite");
             }
         }
 
@@ -182,7 +491,11 @@ namespace MangaAuthorSorter.Tests
                     "a reset statement must not reuse previous row bindings");
                 PlanItem changed = initial[17];
                 changed.Author = "Author 2";
+                changed.ManualTargetAuthor = "Confirmed Author";
+                changed.ManualTargetName = "Confirmed Name";
+                changed.ManualTargetDir = Path.Combine(root, "Confirmed");
                 database.UpsertMigrationPlans("contract-v1", new[] { changed });
+                database.SaveDisplayedSession(session);
                 List<PlanItem> after = database.LoadMigrationPlans("contract-v1", session);
                 Assert(after.Count == 64, "a partial plan update must retain the untouched plans");
                 Assert(after.Count(delegate(PlanItem item) { return item.Author == "Author 2"; }) == 1,
@@ -190,6 +503,74 @@ namespace MangaAuthorSorter.Tests
                 Assert(after.Count(delegate(PlanItem item) { return item.Author == "Author 1"; }) == 63,
                     "the other 63 plans must remain unchanged");
             }
+            using (FileIndexCacheDatabase reopened = new FileIndexCacheDatabase(Path.Combine(testRoot, "plans-batched.db")))
+            {
+                reopened.Open();
+                ScanSessionSnapshot restoredSession = reopened.LoadDisplayedSession();
+                List<PlanItem> restored = reopened.LoadMigrationPlans("contract-v1", restoredSession);
+                Assert(restored.Count == 64, "restart must restore the displayed session without scanning");
+                PlanItem confirmed = restored.Single(delegate(PlanItem item) { return item.Author == "Author 2"; });
+                Assert(confirmed.ManualTargetAuthor == "Confirmed Author" && confirmed.ManualTargetName == "Confirmed Name" &&
+                    confirmed.ManualTargetDir == Path.Combine(root, "Confirmed"), "manual confirmation must survive restart");
+                Assert(reopened.LoadMigrationPlans("different-rules", restoredSession).Count == 0,
+                    "changed rules must not restore invalid plans");
+            }
+        }
+
+        private static void StartupTranslationsUpgradeOldLanguagePacks(string root)
+        {
+            string directory = Path.Combine(root, "old-languages");
+            Directory.CreateDirectory(directory);
+            foreach (string code in new[] { "zh-CN", "en-US", "de-DE" })
+            {
+                File.WriteAllText(Path.Combine(directory, code + ".json"),
+                    "{\"meta\":{\"code\":\"" + code + "\",\"name\":\"Legacy\",\"version\":78},\"strings\":{\"Common.OK\":\"OK\"}}");
+                LanguageManager manager = new LanguageManager(directory);
+                manager.Initialize(code);
+                foreach (string key in new[] { "Status.StartupCheckComplete", "Status.StartupRestoredElapsed",
+                    "Status.RestoredPreviousScan", "Status.RestoredSourceUnavailable", "Status.RestoreUnavailable", "Status.PlanFilesChanged" })
+                    Assert(manager.Get(key) != key, "new status must translate when upgrading old " + code + " language packs: " + key);
+                string translated = manager.Format("Status.StartupCheckComplete", 12, 34);
+                Assert(translated.Contains("12") && translated.Contains("34"), "startup timing placeholders must format");
+                if (code == "zh-CN") Assert(translated.Contains("已恢复缓存"), "Chinese must use the Chinese startup translation");
+            }
+        }
+
+        private static void RestoredPreviewSkipsOnlyUnchangedRows()
+        {
+            PlanItem previous = new PlanItem { SourcePath = "C:\\sample.zip", Author = "Author", TargetPath = "C:\\Author\\sample.zip" };
+            PlanItem loaded = new PlanItem { SourcePath = previous.SourcePath, Author = previous.Author, TargetPath = previous.TargetPath };
+            Assert(MainForm.SamePreview(new[] { previous }, new[] { loaded }), "unchanged loaded rows should reuse the restored grid");
+            loaded.TargetPath = "C:\\Other\\sample.zip";
+            Assert(!MainForm.SamePreview(new[] { previous }, new[] { loaded }), "changed destination must refresh the preview");
+            loaded.TargetPath = previous.TargetPath;
+            loaded.CandidatePaths.Add("C:\\Candidate");
+            Assert(!MainForm.SamePreview(new[] { previous }, new[] { loaded }), "changed candidates must refresh the preview");
+            Assert(!MainForm.SamePreview(new[] { previous }, new PlanItem[0]), "deleted rows must refresh the preview");
+            loaded.CandidatePaths.Clear();
+            loaded.ConflictSourcePaths.Add("C:\\duplicate.zip");
+            Assert(!MainForm.SamePreview(new[] { previous }, new[] { loaded }), "changed conflict evidence must refresh the preview");
+            loaded.ConflictSourcePaths.Clear(); loaded.ExclusionRuleName = "new rule";
+            Assert(!MainForm.SamePreview(new[] { previous }, new[] { loaded }), "changed exclusion evidence must refresh the preview");
+        }
+
+        private static void ScanSettingsSurviveRestart(string root)
+        {
+            string path = Path.Combine(root, "settings.ini");
+            UserSettingsStore store = new UserSettingsStore(path);
+            store.UpdateScanSettings(1500, true, 4);
+            store.UpdateListViewFilter("matched");
+            store.UpdateLanguage("en-US");
+            UserSettingsData restored = new UserSettingsStore(path).Load();
+            Assert(restored.ScanLimit == 1500 && restored.ScanRecursive && restored.ScanMode == 4,
+                "scan settings must survive restart and unrelated settings saves");
+            Assert(restored.ListViewFilter == "matched", "status filter must survive unrelated settings saves");
+            store.UpdateListViewFilter("invalid-filter");
+            Assert(new UserSettingsStore(path).Load().ListViewFilter == "all", "unknown historical filters must fall back to all");
+            store.UpdateScanSettings(0, false, 0);
+            restored = new UserSettingsStore(path).Load();
+            Assert(restored.ScanLimit == 0 && !restored.ScanRecursive && restored.ScanMode == 0,
+                "unlimited count and unchecked recursive state must round-trip");
         }
 
         private static void PlanCacheWritePolicyAvoidsRewritingCacheHits()
@@ -242,6 +623,32 @@ namespace MangaAuthorSorter.Tests
                 "target index metrics should survive restart");
             Assert(restored.PlanCacheReadMs == 18 && restored.PlanCacheWriteMs == 36 && restored.FinalizeMs == 14,
                 "cache IO and finalization timing must survive restart");
+            Assert(restored.StartupRestoreMs == -1 && restored.BackgroundValidationMs == -1 &&
+                restored.EverythingQueryCount == -1 && restored.FirstInteractiveMs == -1 && restored.ActualRecognitions == -1,
+                "historical entries must report absent new fields as unavailable, not zero");
+            ScanPerformanceDiagnostics.Record(new ScanPerformanceEntry { Time = time.AddSeconds(1),
+                StartupRestoreMs = 25, BackgroundValidationMs = 200, EverythingQueryCount = 0,
+                FirstInteractiveMs = 100, StartupWindowShownMs = 75, StartupInitializationStages = "10,20,0,30", ActualRecognitions = 0,
+                StartupUiTrace = "Menu:25;Responsive:100",
+                SdkPrepareMs = 0, EverythingWaitMs = 500, EverythingReadMs = 40, DiscoveryCheckMs = 20,
+                DiscoverySetMs = 0, DiscoveryEnumerateMs = 19, DiscoveryCompareMs = 0 });
+            ScanPerformanceDiagnostics.Initialize(logPath, true, false, true);
+            ScanPerformanceEntry modern = ScanPerformanceDiagnostics.Snapshot().Last();
+            Assert(modern.StartupRestoreMs == 25 && modern.BackgroundValidationMs == 200 && modern.EverythingQueryCount == 0 &&
+                modern.FirstInteractiveMs == 100 && modern.ActualRecognitions == 0,
+                "new metrics, including explicit zero counts, must survive restart");
+            Assert(restored.StartupWindowShownMs == -1 && modern.StartupWindowShownMs == 75, "window initialization metrics must remain optional and round-trip");
+            Assert(String.IsNullOrEmpty(restored.StartupInitializationStages) && modern.StartupInitializationStages == "10,20,0,30", "startup initialization details must preserve zero and remain optional");
+            Assert(String.IsNullOrEmpty(restored.StartupUiTrace) && modern.StartupUiTrace == "Menu:25;Responsive:100",
+                "nested startup trace must remain optional and retain individual point/interval values");
+            Assert(restored.DiscoverySetMs == -1 && restored.DiscoveryEnumerateMs == -1 && restored.DiscoveryCompareMs == -1 &&
+                modern.DiscoverySetMs == 0 && modern.DiscoveryEnumerateMs == 19 && modern.DiscoveryCompareMs == 0,
+                "completeness substages must distinguish missing history from measured zero");
+            Assert(ScanPerformanceDiagnostics.WarmupEnabled, "legacy disabled warmup must not disable automatic preparation");
+            Assert(restored.SdkPrepareMs == -1 && restored.EverythingWaitMs == -1 && restored.EverythingReadMs == -1 && restored.DiscoveryCheckMs == -1,
+                "old diagnostics must not invent detailed provider timings");
+            Assert(modern.SdkPrepareMs == 0 && modern.EverythingWaitMs == 500 && modern.EverythingReadMs == 40 && modern.DiscoveryCheckMs == 20,
+                "provider substage timings, including zero, must survive history reload");
 
             ScanWarmupStatusEntry newerWarmup = new ScanWarmupStatusEntry { Time = time.AddMinutes(5) };
             Assert(!ScanPerformanceForm.ShouldShowWarmupForSelection(restored, newerWarmup),

@@ -56,3 +56,5 @@ EhTagTranslation/EhTagDb
 https://github.com/EhTagTranslation/EhTagDb
 Licensed under GNU General Public License v3.0 only (GPL-3.0-only).
 GuiGui downloads this optional aggregate database only after an explicit user action; it is not bundled with the application.
+
+Metadata reference (opt-in download): van-geaux/nh-metadata-archive, GPL-3.0, https://github.com/van-geaux/nh-metadata-archive. Raw CSV files are not bundled in this source archive.

@@ -1,3 +1,83 @@
+## V1.13.10 — Leistungsverbesserung beim Zusammenführen des Autorenindex
+- Normale Updates installieren den vollständigen öffentlichen Index direkt, ohne eine Werkbeleg-Datenbank zu erstellen, zu lesen oder zu vergrößern; Belege bleiben dem erweiterten Quellen-Build vorbehalten.
+- Fehlende Indizes ergänzen und wiederholte Abfragen bei großen Tag-Datenbanken durch Gruppierung ersetzen.
+- Neue Aktion zum erneuten Zusammenführen bereits importierter Belege, ohne erneuten Download.
+- Pause, Fortsetzen und Abbruch auch während SQLite-Zusammenführung; laufende Zeit anzeigen.
+- Schema v4 und Benutzerdaten unverändert. Windows-Build und große Quellen noch zu testen.
+
+## V1.13.9 — Kompilierungsfehler der erweiterten Download-Schnittstelle
+- Optionalen Steuerungsparameter bei `DownloadAsync` ergänzt; behebt CS0103 und CS1501.
+- Pause, Fortsetzen und Abbrechen bleiben erhalten. Der vollständige Windows-Build muss noch geprüft werden.
+
+## V1.13.8 — Pfade der Compiler-Quelldateien
+- CS1504 bei fünf Quelldateien des erweiterten Builders durch Windows-Pfade in CompilerSources.rsp behoben.
+- Vor der Kompilierung alle Quelldateien, doppelte Einträge und die Übereinstimmung mit der Projektdatei prüfen.
+- Keine Funktionsänderung gegenüber V1.13.7; Windows-Kompilierung noch zu prüfen.
+
+## V1.13.7 — Drei Quellen für den erweiterten Aufbau
+WinForms-Quellkarten, EH-Tagdaten, inkrementelles CSV und explizite Schema-v4-Basis; Windows-Tests stehen noch aus.
+
+## V1.13.6 — Öffentlicher Index und Vollaufbau
+
+- Offizieller Datenbank-Download mit SHA-256-Prüfung und lokalem Import.
+- Vollständiger CSV-Import mit leerer Schema-v4-Basis falls nötig.
+- Neue offizielle Basis plus lokale Belege nach Neustart aktivieren.
+- Keine .NET-8-/WPF-Laufzeit erforderlich; Manifest muss veröffentlicht werden.
+
+## V1.13.5 — Inkrementelle Zusammenführung der Autoren-/Gruppendatenbank
+
+- Monatliche CSV-Daten werden mit den gemeinsamen Filterregeln in den öffentlichen Index integriert.
+- Aus einem offiziellen Basisstand wird eine neue Datenbank aufgebaut; Aktivierung beim Neustart.
+- Bestätigte Benutzerdaten bleiben geschützt; mehrdeutige Identitäten werden nicht automatisch zusammengeführt.
+
+## V1.13.4 — Startabsturz und Sprachprüfung behoben
+
+- Startabsturz durch einen doppelten Schlüssel im integrierten englischen Wörterbuch behoben.
+- Vor dem Kompilieren doppelte Schlüssel und die Übereinstimmung mit den offiziellen Sprachdateien prüfen.
+
+## V1.13.3 — GitHub-Werkbelege
+
+- Detail-Schaltfläche umbenannt; nHentai API v2-Abfragen entfernt.
+- Ferngesteuerte GitHub-CSV-Aktualisierung per SHA; Werkbelege separat in SQLite.
+- Keine automatische Identitätszusammenführung; öffentliche Datenbank bleibt schreibgeschützt.
+
+## V1.13.2 — Korrekturen in der Autorenverwaltung
+
+- Bei öffentlichen Daten „Vorherige Seite“ links und „Nächste Seite“ rechts anordnen.
+- Fehler bei ungültiger Auswahl beim Öffnen der Autoren-Gruppen-Beziehungen beheben.
+
+## V1.13.1 — Einheitliche Autorenverwaltung
+
+- Autoren und Gruppen gemeinsam suchen und bearbeiten; Aliasnamen, Quellen und Beziehungen in einer Detailansicht anzeigen.
+- Die Bibliothek auf drei Hauptseiten reduzieren: Autoren und Gruppen, Konflikte und Prüfung sowie Datenpflege.
+- Die öffentliche Datenbank bleibt schreibgeschützt; persönliche Änderungen als Benutzeranpassungen speichern.
+- Seitennavigation für öffentliche Daten ergänzen und Ordnernamenregeln in die Archiveinstellungen verschieben.
+
+## V1.13.0 — Dateinamenstruktur und Veranstaltungspräfixe
+
+- Identitäten nach unbekannten Präfixen vor [Gruppe (Autor)] erkennen; vermutete Veranstaltungen aus der Bewertung ausschließen und explizite Autoren stärker gewichten.
+- Gemeinsame Präfixe anhand verschiedener Gruppen-/Autorenpaare nur für den Scan erkennen; bestätigte Identitäten und Konfliktprüfungen erhalten.
+- Werktitel recherchieren, Vorschläge zur Bestätigung für die Offline-Nutzung speichern, Titel nicht als Autorenalias lernen und Erkennungsgründe anzeigen; Cache-Version erhöhen.
+
+## V1.12.13 — Fensterwechsel bei Online-Einstellungen und Entitäten
+
+- Online-Einstellungen als einzelnes nichtmodales Fenster öffnen; Verwaltungsfenster dem Hauptfenster zuordnen und verdeckte modale Blockierung vermeiden.
+- Bestehende Fenster wiederverwenden, minimierte Entitätenbibliothek wiederherstellen sowie Speichern, Abbrechen und gemeinsames Schließen erhalten.
+- Isolierte Fensterregression für Bedienbarkeit, Wiederöffnen, Speichern, Abbrechen und Schließen ergänzen.
+
+## V1.12.12 — Öffentliche Datenbank Schema v4
+
+- Kompatibilitätsansichten und ArtistGroup-Beziehungen lesen, ohne interne Data-Tabellen oder die Wartungsdatenbank zu öffnen.
+- DanbooruArtistTag für Identitäten, deaktivierte Anpassungen und Cache-Abhängigkeiten übernehmen; ältere Datenbanken ohne diese Spalte unterstützen. Source über die Ansicht und ExternalId mit Provider-/Rollenbereich lesen.
+- Ansichtentests und schreibgeschützte Prüfung der echten Builder-Ausgabe ergänzen.
+
+## V1.12.11 — Scan-Blockierung bei öffentlichen Anpassungen
+
+- Dateiabhängigkeiten aus geladenen Namen und Alias-Schlüsseln bilden, ohne öffentliche Identitäten je Datei erneut abzufragen.
+- Standard-Bereinigungsregeln einmal kompilieren, statt Regexe für jede Dateiabhängigkeit neu zu erstellen.
+- Plan-Cache-Lesen abbrechbar machen; abgebrochene Schreibtransaktionen zurückrollen und Abbruch weiterreichen.
+- Regression mit 8.490 Dateien und öffentlicher Anpassung sowie Abbruchprüfungen ergänzen.
+
 ## V1.12.10 — Einheitliche Autorenverwaltung und öffentliche Anpassungen
 
 - Separate Aliasbibliothek entfernt. AuthorEntities.json verwaltet Autoren, Gruppen, Aliase, Beziehungen, Konflikte, öffentliche Anpassungen, Import/Export und Abfragestatus.

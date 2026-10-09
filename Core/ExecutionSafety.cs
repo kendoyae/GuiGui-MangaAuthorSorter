@@ -1,10 +1,47 @@
 ﻿using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace MangaAuthorSorter
 {
     internal static class ExecutionSafety
     {
+        public static void ApplyBatchTargetConflictMarks(IList<PlanItem> plan)
+        {
+            if (plan == null) return;
+            IEnumerable<IGrouping<string, PlanItem>> groups = plan
+                .Where(delegate(PlanItem p)
+                {
+                    return p != null && p.CanMove &&
+                        !String.IsNullOrWhiteSpace(p.TargetPath) &&
+                        !String.Equals(p.SourcePath, p.TargetPath, StringComparison.OrdinalIgnoreCase);
+                })
+                .GroupBy(delegate(PlanItem p) { return p.TargetPath; }, StringComparer.OrdinalIgnoreCase);
+
+            foreach (IGrouping<string, PlanItem> group in groups)
+            {
+                List<PlanItem> conflicts = group
+                    .GroupBy(delegate(PlanItem p) { return p.SourcePath; }, StringComparer.OrdinalIgnoreCase)
+                    .Select(delegate(IGrouping<string, PlanItem> g) { return g.First(); })
+                    .ToList();
+                if (conflicts.Count <= 1) continue;
+                List<string> sources = conflicts.Select(delegate(PlanItem p) { return p.SourcePath; }).ToList();
+                foreach (PlanItem item in conflicts)
+                {
+                    item.CanMoveBeforePlanConflict = item.CanMove;
+                    item.StatusBeforePlanConflict = item.Status ?? "";
+                    item.StatusCodeBeforePlanConflict = item.StatusCode;
+                    item.CanMove = false;
+                    item.Status = "批次内目标重名冲突";
+                    item.StatusCode = PlanStatusCode.BatchTargetConflict;
+                    item.PlanConflictKind = "batch-target";
+                    item.ConflictTargetPath = group.Key;
+                    item.ConflictSourcePaths = new List<string>(sources);
+                }
+            }
+        }
+
         public static string GetVolumeRoot(string path)
         {
             if (String.IsNullOrWhiteSpace(path))

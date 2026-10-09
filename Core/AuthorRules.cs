@@ -573,6 +573,9 @@ namespace MangaAuthorSorter
             List<string> result = new List<string>();
             if (String.IsNullOrWhiteSpace(baseName)) return result;
 
+            FileNameStructure structure = FileNameStructure.Parse(baseName);
+            baseName = structure.IdentityText;
+
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<string> leadingChain = GetLeadingIdentityChain(baseName, cleaningStore);
             foreach (string value in leadingChain)
@@ -815,11 +818,12 @@ namespace MangaAuthorSorter
                         continue;
                     }
 
-                    // A non-metadata parenthesis at the filename front is an
-                    // identity. Once found, following text is the work title.
+                    // Continue through adjacent identity fields; the title
+                    // boundary, rather than the first candidate, ends parsing.
                     if (value.Length > 0)
                         identities.Add(value);
-                    break;
+                    position = parenthesis.Index + parenthesis.Length;
+                    continue;
                 }
 
                 break;

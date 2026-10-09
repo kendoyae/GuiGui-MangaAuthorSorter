@@ -14,8 +14,6 @@ namespace MangaAuthorSorter
         private readonly NumericUpDown _maxLookups;
         private readonly CheckBox _useLocalReference;
         private readonly CheckBox _useEhentai;
-        private readonly CheckBox _useNhentai;
-        private readonly TextBox _nhentaiApiKey;
         private readonly string _entityPath;
         private readonly Action _openEntityLibrary;
         private readonly Action _openReferenceLibrary;
@@ -26,8 +24,6 @@ namespace MangaAuthorSorter
         public int MaxLookupsPerScan { get; private set; }
         public bool UseLocalReference { get; private set; }
         public bool UseEhentai { get; private set; }
-        public bool UseNhentai { get; private set; }
-        public string NhentaiApiKey { get; private set; }
 
         public OnlineAuthorSettingsForm(
             LanguageManager language,
@@ -38,8 +34,6 @@ namespace MangaAuthorSorter
             int maxLookups,
             bool useLocalReference,
             bool useEhentai,
-            bool useNhentai,
-            string nhentaiApiKey,
             string entityPath,
             Action openEntityLibrary,
             Action openReferenceLibrary)
@@ -54,8 +48,6 @@ namespace MangaAuthorSorter
             MaxLookupsPerScan = Math.Max(1, Math.Min(100, maxLookups));
             UseLocalReference = useLocalReference;
             UseEhentai = useEhentai;
-            UseNhentai = useNhentai;
-            NhentaiApiKey = nhentaiApiKey ?? "";
 
             Text = L("Dialog.OnlineAuthor.Title");
             ClientSize = new Size(780, 650);
@@ -154,19 +146,8 @@ namespace MangaAuthorSorter
             chain.AutoScroll = true;
             _useLocalReference = NewSourceCheckBox(L("Dialog.OnlineAuthor.SourceLocal"), useLocalReference);
             _useEhentai = NewSourceCheckBox(L("Dialog.OnlineAuthor.SourceEhentai"), useEhentai);
-            _useNhentai = NewSourceCheckBox(L("Dialog.OnlineAuthor.SourceNhentai"), useNhentai);
-            _useNhentai.CheckedChanged += delegate { UpdateEnabledState(); };
             chain.Controls.Add(_useLocalReference);
             chain.Controls.Add(_useEhentai);
-            FlowLayoutPanel nhRow = new FlowLayoutPanel();
-            nhRow.AutoSize = true;
-            nhRow.WrapContents = false;
-            nhRow.Controls.Add(_useNhentai);
-            Label keyLabel = new Label(); keyLabel.Text = L("Dialog.OnlineAuthor.NhApiKey"); keyLabel.AutoSize = true; keyLabel.Margin = new Padding(18, 8, 5, 0);
-            nhRow.Controls.Add(keyLabel);
-            _nhentaiApiKey = new TextBox(); _nhentaiApiKey.Width = 255; _nhentaiApiKey.UseSystemPasswordChar = true; _nhentaiApiKey.Text = nhentaiApiKey ?? ""; _nhentaiApiKey.Margin = new Padding(0, 4, 0, 0);
-            nhRow.Controls.Add(_nhentaiApiKey);
-            chain.Controls.Add(nhRow);
             chainBox.Controls.Add(chain);
             root.Controls.Add(chainBox, 0, 2);
 
@@ -201,6 +182,7 @@ namespace MangaAuthorSorter
             buttons.Padding = new Padding(0, 8, 0, 0);
             Button cancel = UiStyle.NewButton(L("Common.Cancel"), 88, false);
             cancel.DialogResult = DialogResult.Cancel;
+            cancel.Click += delegate { Close(); };
             Button save = UiStyle.NewButton(L("Common.Save"), 88, true);
             save.Click += delegate { SaveValues(); };
             buttons.Controls.Add(cancel);
@@ -235,8 +217,6 @@ namespace MangaAuthorSorter
             if (_maxLookups != null) _maxLookups.Enabled = enabled;
             if (_useLocalReference != null) _useLocalReference.Enabled = enabled;
             if (_useEhentai != null) _useEhentai.Enabled = enabled;
-            if (_useNhentai != null) _useNhentai.Enabled = enabled;
-            if (_nhentaiApiKey != null) _nhentaiApiKey.Enabled = enabled && _useNhentai.Checked;
         }
 
         private void SaveValues()
@@ -247,8 +227,6 @@ namespace MangaAuthorSorter
             MaxLookupsPerScan = Decimal.ToInt32(_maxLookups.Value);
             UseLocalReference = _useLocalReference.Checked;
             UseEhentai = _useEhentai.Checked;
-            UseNhentai = _useNhentai.Checked;
-            NhentaiApiKey = _nhentaiApiKey.Text.Trim();
             DialogResult = DialogResult.OK;
             Close();
         }

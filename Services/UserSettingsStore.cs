@@ -11,6 +11,10 @@ namespace MangaAuthorSorter
     {
         public string SourcePath = "";
         public string AuthorRoot = "";
+        public int ScanLimit = 50;
+        public bool ScanRecursive;
+        public int ScanMode;
+        public string ListViewFilter = "all";
 
         public string LanguageCode = "";
 
@@ -36,8 +40,8 @@ namespace MangaAuthorSorter
         public int MaxOnlineLookupsPerScan = 20;
         public bool UseLocalAuthorReference = true;
         public bool UseEhentaiLookup = true;
-        public bool UseNhentaiLookup = true;
-        public string NhentaiApiKey = "";
+
+
         public bool PerformanceDiagnosticsEnabled = false;
         public bool ScanWarmupEnabled = true;
         public bool EverythingEnabled = true;
@@ -129,6 +133,25 @@ namespace MangaAuthorSorter
                         {
                             data.AuthorRoot =
                                 decoded;
+                        }
+                        else if (String.Equals(key, "ScanLimit", StringComparison.OrdinalIgnoreCase))
+                        {
+                            int value;
+                            if (Int32.TryParse(decoded, out value) && value >= 0 && value <= 100000) data.ScanLimit = value;
+                        }
+                        else if (String.Equals(key, "ScanRecursive", StringComparison.OrdinalIgnoreCase))
+                        {
+                            bool value;
+                            if (Boolean.TryParse(decoded, out value)) data.ScanRecursive = value;
+                        }
+                        else if (String.Equals(key, "ListViewFilter", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.ListViewFilter = NormalizeListViewFilter(decoded);
+                        }
+                        else if (String.Equals(key, "ScanMode", StringComparison.OrdinalIgnoreCase))
+                        {
+                            int value;
+                            if (Int32.TryParse(decoded, out value) && value >= 0 && value <= 4) data.ScanMode = value;
                         }
                         else if (String.Equals(
                                      key,
@@ -276,14 +299,6 @@ namespace MangaAuthorSorter
                         else if (String.Equals(key, "UseEhentaiLookup", StringComparison.OrdinalIgnoreCase))
                         {
                             bool value; if (Boolean.TryParse(decoded, out value)) data.UseEhentaiLookup = value;
-                        }
-                        else if (String.Equals(key, "UseNhentaiLookup", StringComparison.OrdinalIgnoreCase))
-                        {
-                            bool value; if (Boolean.TryParse(decoded, out value)) data.UseNhentaiLookup = value;
-                        }
-                        else if (String.Equals(key, "NhentaiApiKey", StringComparison.OrdinalIgnoreCase))
-                        {
-                            data.NhentaiApiKey = decoded;
                         }
                         else if (String.Equals(
                                      key,
@@ -566,9 +581,7 @@ namespace MangaAuthorSorter
             bool saveCache,
             int maxLookupsPerScan,
             bool useLocalReference,
-            bool useEhentai,
-            bool useNhentai,
-            string nhentaiApiKey)
+            bool useEhentai)
         {
             UserSettingsData current = Load();
             current.OnlineAuthorLookupEnabled = enabled;
@@ -579,8 +592,6 @@ namespace MangaAuthorSorter
             current.MaxOnlineLookupsPerScan = Math.Max(1, Math.Min(100, maxLookupsPerScan));
             current.UseLocalAuthorReference = useLocalReference;
             current.UseEhentaiLookup = useEhentai;
-            current.UseNhentaiLookup = useNhentai;
-            current.NhentaiApiKey = (nhentaiApiKey ?? "").Trim();
             Save(current);
         }
 
@@ -655,6 +666,29 @@ namespace MangaAuthorSorter
             Save(current);
         }
 
+        internal static string NormalizeListViewFilter(string value)
+        {
+            string normalized = (value ?? "").ToLowerInvariant();
+            return new[] { "all", "attention", "duplicate", "excluded", "new", "ambiguous", "unrecognized", "matched" }
+                .Contains(normalized) ? normalized : "all";
+        }
+
+        public void UpdateListViewFilter(string filter)
+        {
+            UserSettingsData current = Load();
+            current.ListViewFilter = NormalizeListViewFilter(filter);
+            Save(current);
+        }
+
+        public void UpdateScanSettings(int limit, bool recursive, int mode)
+        {
+            UserSettingsData data = Load();
+            data.ScanLimit = Math.Max(0, Math.Min(100000, limit));
+            data.ScanRecursive = recursive;
+            data.ScanMode = Math.Max(0, Math.Min(4, mode));
+            Save(data);
+        }
+
         private void Save(
             UserSettingsData data)
         {
@@ -665,6 +699,9 @@ namespace MangaAuthorSorter
 
                 lines.Add(
                     "# MangaAuthorSorter - User Settings");
+                lines.Add("ScanLimit=" + Encode(data.ScanLimit.ToString(CultureInfo.InvariantCulture)));
+                lines.Add("ScanRecursive=" + Encode(data.ScanRecursive.ToString()));
+                lines.Add("ScanMode=" + Encode(data.ScanMode.ToString(CultureInfo.InvariantCulture)));
                 lines.Add(
                     "# File type profiles are stored separately in FileTypeProfiles.json.");
 
@@ -739,23 +776,31 @@ namespace MangaAuthorSorter
                     Encode(data.MaxOnlineLookupsPerScan.ToString()));
                 lines.Add("UseLocalAuthorReference=" + Encode(data.UseLocalAuthorReference.ToString()));
                 lines.Add("UseEhentaiLookup=" + Encode(data.UseEhentaiLookup.ToString()));
-                lines.Add("UseNhentaiLookup=" + Encode(data.UseNhentaiLookup.ToString()));
-                lines.Add("NhentaiApiKey=" + Encode(data.NhentaiApiKey ?? ""));
+
+
 
                 lines.Add(
                     "PerformanceDiagnosticsEnabled=" +
                     Encode(data.PerformanceDiagnosticsEnabled.ToString()));
                 lines.Add("ScanWarmupEnabled=" + Encode(data.ScanWarmupEnabled.ToString()));
+                lines.Add("ListViewFilter=" + Encode(NormalizeListViewFilter(data.ListViewFilter)));
                 lines.Add("EverythingEnabled=" + Encode(data.EverythingEnabled.ToString()));
                 lines.Add("RecognitionMode=" + Encode(data.RecognitionMode == AuthorRecognitionMode.Scoring ? "Scoring" : "Classic"));
                 lines.Add("LastUpdateCheckUtc=" + Encode(data.LastUpdateCheckUtc.HasValue
                     ? data.LastUpdateCheckUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture)
                     : ""));
 
-                File.WriteAllLines(
-                    _path,
-                    lines.ToArray(),
-                    new UTF8Encoding(true));
+                string temporary = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    File.WriteAllLines(temporary, lines.ToArray(), new UTF8Encoding(true));
+                    if (File.Exists(_path)) File.Replace(temporary, _path, null);
+                    else File.Move(temporary, _path);
+                }
+                finally
+                {
+                    if (File.Exists(temporary)) File.Delete(temporary);
+                }
             }
             catch
             {

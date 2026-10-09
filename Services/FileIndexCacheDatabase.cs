@@ -23,6 +23,8 @@ namespace MangaAuthorSorter
         private readonly object _gate = new object();
         private readonly string _path;
         private IntPtr _db;
+        private bool _disposed;
+        public bool WasRecoveredFromCorruption { get; private set; }
 
         public FileIndexCacheDatabase(string path)
         {
@@ -36,6 +38,7 @@ namespace MangaAuthorSorter
         {
             lock (_gate)
             {
+                if (_disposed) throw new ObjectDisposedException("FileIndexCacheDatabase");
                 if (_db != IntPtr.Zero) return;
                 string directory = Path.GetDirectoryName(_path);
                 if (!String.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
@@ -44,8 +47,38 @@ namespace MangaAuthorSorter
                     OpenReadWrite | OpenCreate | OpenFullMutex, IntPtr.Zero);
                 if (code != SqliteOk || _db == IntPtr.Zero)
                     throw new InvalidOperationException("无法打开文件索引缓存：" + ErrorMessage(_db));
-                Execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
-                EnsureSchema();
+                try
+                {
+                    Execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
+                    EnsureSchema();
+                }
+                catch
+                {
+                    int failure = Native.sqlite3_errcode(_db) & 0xff;
+                    Native.sqlite3_close(_db); _db = IntPtr.Zero;
+                    if ((failure != 11 && failure != 26) || !File.Exists(_path) || WasRecoveredFromCorruption) throw;
+                    // Preserve a corrupt database and its journal as a matching
+                    // set; never treat permissions or I/O failures as corruption.
+                    string backup = _path + ".corrupt-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss") + "-" + Guid.NewGuid().ToString("N");
+                    List<KeyValuePair<string, string>> moved = new List<KeyValuePair<string, string>>();
+                    try
+                    {
+                        foreach (string suffix in new[] { "", "-wal", "-shm" })
+                        {
+                            if (!File.Exists(_path + suffix)) continue;
+                            File.Move(_path + suffix, backup + suffix);
+                            moved.Add(new KeyValuePair<string, string>(_path + suffix, backup + suffix));
+                        }
+                    }
+                    catch
+                    {
+                        foreach (KeyValuePair<string, string> entry in moved.AsEnumerable().Reverse())
+                            if (!File.Exists(entry.Key) && File.Exists(entry.Value)) File.Move(entry.Value, entry.Key);
+                        throw;
+                    }
+                    WasRecoveredFromCorruption = true;
+                    Open();
+                }
             }
         }
 
@@ -149,13 +182,14 @@ namespace MangaAuthorSorter
                     using (Statement statement = Prepare("SELECT last_insert_rowid()"))
                         sessionId = statement.Step() == SqliteRow ? statement.Int64(0) : 0;
 
-                    foreach (System.IO.FileInfo file in files ?? Enumerable.Empty<System.IO.FileInfo>())
+                    using (Statement statement = Prepare(
+                        "INSERT OR IGNORE INTO ScanSessionFiles(SessionId,FileId) " +
+                        "SELECT ?1,FileId FROM SourceFiles WHERE RootId=?2 AND NormalizedPath=?3"))
                     {
-                        if (file == null) continue;
-                        using (Statement statement = Prepare(
-                            "INSERT OR IGNORE INTO ScanSessionFiles(SessionId,FileId) " +
-                            "SELECT ?1,FileId FROM SourceFiles WHERE RootId=?2 AND NormalizedPath=?3"))
+                        foreach (System.IO.FileInfo file in files ?? Enumerable.Empty<System.IO.FileInfo>())
                         {
+                            if (file == null) continue;
+                            statement.Reset();
                             statement.Bind(1, sessionId);
                             statement.Bind(2, rootId);
                             statement.Bind(3, NormalizePath(file.FullName));
@@ -607,16 +641,6 @@ namespace MangaAuthorSorter
             }
         }
 
-        private long FindSourceFileId(long rootId, string fullPath)
-        {
-            using (Statement statement = Prepare(
-                "SELECT FileId FROM SourceFiles WHERE RootId=?1 AND NormalizedPath=?2"))
-            {
-                statement.Bind(1, rootId);
-                statement.Bind(2, NormalizePath(fullPath));
-                return statement.Step() == SqliteRow ? statement.Int64(0) : 0;
-            }
-        }
 
         private static string NormalizeIndexScopeKey(string value)
         {
@@ -675,23 +699,7 @@ namespace MangaAuthorSorter
                     if (staysInSource)
                     {
                         System.IO.FileInfo file = new System.IO.FileInfo(targetPath);
-                        using (Statement statement = Prepare(
-                            "UPDATE SourceFiles SET FullPath=?1,NormalizedPath=?2,RelativePath=?3," +
-                            "DirectoryPath=?4,FileName=?5,Extension=?6,FileSize=?7," +
-                            "LastWriteUtc=?8,CreationUtc=?9 WHERE FileId=?10"))
-                        {
-                            statement.Bind(1, file.FullName);
-                            statement.Bind(2, NormalizePath(file.FullName));
-                            statement.Bind(3, MakeRelative(rootPath, file.FullName));
-                            statement.Bind(4, file.DirectoryName ?? "");
-                            statement.Bind(5, file.Name ?? "");
-                            statement.Bind(6, file.Extension ?? "");
-                            statement.Bind(7, file.Length);
-                            statement.Bind(8, file.LastWriteTimeUtc.ToString("o"));
-                            statement.Bind(9, file.CreationTimeUtc.ToString("o"));
-                            statement.Bind(10, fileId);
-                            statement.StepDone();
-                        }
+                        UpdateSourceFile(fileId, rootPath, file);
                         if (!String.Equals(oldFileName, file.Name, StringComparison.Ordinal))
                         {
                             DeleteFactsForFileId(fileId);
@@ -721,6 +729,27 @@ namespace MangaAuthorSorter
                     try { Execute("ROLLBACK;"); } catch { }
                     throw;
                 }
+            }
+        }
+
+        private void UpdateSourceFile(long fileId, string rootPath, System.IO.FileInfo file)
+        {
+            using (Statement statement = Prepare(
+                "UPDATE SourceFiles SET FullPath=?1,NormalizedPath=?2,RelativePath=?3," +
+                "DirectoryPath=?4,FileName=?5,Extension=?6,FileSize=?7," +
+                "LastWriteUtc=?8,CreationUtc=?9 WHERE FileId=?10"))
+            {
+                statement.Bind(1, file.FullName);
+                statement.Bind(2, NormalizePath(file.FullName));
+                statement.Bind(3, MakeRelative(rootPath, file.FullName));
+                statement.Bind(4, file.DirectoryName ?? "");
+                statement.Bind(5, file.Name ?? "");
+                statement.Bind(6, file.Extension ?? "");
+                statement.Bind(7, file.Length);
+                statement.Bind(8, file.LastWriteTimeUtc.ToString("o"));
+                statement.Bind(9, file.CreationTimeUtc.ToString("o"));
+                statement.Bind(10, fileId);
+                statement.StepDone();
             }
         }
 
@@ -773,23 +802,7 @@ namespace MangaAuthorSorter
                 Execute("BEGIN IMMEDIATE;");
                 try
                 {
-                    using (Statement statement = Prepare(
-                        "UPDATE SourceFiles SET FullPath=?1,NormalizedPath=?2,RelativePath=?3," +
-                        "DirectoryPath=?4,FileName=?5,Extension=?6,FileSize=?7," +
-                        "LastWriteUtc=?8,CreationUtc=?9 WHERE FileId=?10"))
-                    {
-                        statement.Bind(1, file.FullName);
-                        statement.Bind(2, NormalizePath(file.FullName));
-                        statement.Bind(3, MakeRelative(rootPath, file.FullName));
-                        statement.Bind(4, file.DirectoryName ?? "");
-                        statement.Bind(5, file.Name ?? "");
-                        statement.Bind(6, file.Extension ?? "");
-                        statement.Bind(7, file.Length);
-                        statement.Bind(8, file.LastWriteTimeUtc.ToString("o"));
-                        statement.Bind(9, file.CreationTimeUtc.ToString("o"));
-                        statement.Bind(10, fileId);
-                        statement.StepDone();
-                    }
+                    UpdateSourceFile(fileId, rootPath, file);
                     using (Statement statement = Prepare(
                         "DELETE FROM ParsedMetadata WHERE FileId=?1;"))
                     {
@@ -893,10 +906,31 @@ namespace MangaAuthorSorter
             }
         }
 
+        public void SaveDisplayedSession(ScanSessionSnapshot session)
+        {
+            if (session != null && session.SessionId > 0)
+                SetMetadata("DisplayedSession", session.SessionId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        public ScanSessionSnapshot LoadDisplayedSession()
+        {
+            lock (_gate)
+            {
+                EnsureOpen();
+                long id;
+                if (!Int64.TryParse(ScalarText("SELECT Value FROM CacheMetadata WHERE Key='DisplayedSession'"), out id)) return null;
+                using (Statement statement = Prepare("SELECT RootId FROM ScanSessions WHERE SessionId=?1 AND State='Complete'"))
+                {
+                    statement.Bind(1, id);
+                    return statement.Step() == SqliteRow ? new ScanSessionSnapshot { SessionId = id, RootId = statement.Int64(0) } : null;
+                }
+            }
+        }
+
         public List<PlanItem> LoadMigrationPlans(
             string configKey,
             ScanSessionSnapshot session,
-            Func<string, string> identityDependency = null)
+            Func<string, string> identityDependency = null, Func<bool> cancelRequested = null)
         {
             List<PlanItem> result = new List<PlanItem>();
             if (session == null || session.SessionId <= 0) return result;
@@ -907,7 +941,7 @@ namespace MangaAuthorSorter
                     "SELECT p.FileId,s.FileName,s.FullPath,p.Author,p.MatchedAs,p.MatchWhy," +
                     "p.TargetDir,p.TargetPath,p.Status,p.CanMove,p.FileSize,p.LastWriteTime," +
                     "p.RecognitionScore,p.RunnerUpScore,p.StatusCode,p.EvidenceKind,p.StatusArgument," +
-                    "p.CandidatePaths,p.CandidateNames,p.CandidatePlanned,p.ConfigKey " +
+                    "p.CandidatePaths,p.CandidateNames,p.CandidatePlanned,p.ConfigKey,p.ManualTargetDir,p.ManualTargetName,p.ManualTargetAuthor " +
                     "FROM MigrationPlanCache p INNER JOIN SourceFiles s ON s.FileId=p.FileId " +
                     "INNER JOIN ScanSessionFiles sf ON sf.FileId=p.FileId " +
                     "WHERE sf.SessionId=?1 AND " + (identityDependency == null ? "p.ConfigKey=?2" :
@@ -917,6 +951,7 @@ namespace MangaAuthorSorter
                     statement.Bind(2, configKey ?? "");
                     while (statement.Step() == SqliteRow)
                     {
+                        if (cancelRequested != null && cancelRequested()) throw new OperationCanceledException();
                         if (identityDependency != null && statement.Text(20) != (configKey ?? "") + "|AuthorDependency=" + identityDependency(statement.Text(1))) continue;
                         PlanStatusCode statusCode;
                         RecognitionEvidenceKind evidenceKind;
@@ -950,6 +985,9 @@ namespace MangaAuthorSorter
                         item.CandidatePaths = SplitPlanList(statement.Text(17));
                         item.CandidateNames = SplitPlanList(statement.Text(18));
                         item.CandidateIsPlanned = SplitPlanBools(statement.Text(19));
+                        item.ManualTargetDir = statement.Text(21);
+                        item.ManualTargetName = statement.Text(22);
+                        item.ManualTargetAuthor = statement.Text(23);
                         result.Add(item);
                     }
                 }
@@ -966,7 +1004,7 @@ namespace MangaAuthorSorter
             });
         }
 
-        public void UpsertMigrationPlans(string configKey, IEnumerable<PlanItem> items, Func<string, string> identityDependency = null)
+        public void UpsertMigrationPlans(string configKey, IEnumerable<PlanItem> items, Func<string, string> identityDependency = null, Func<bool> cancelRequested = null)
         {
             List<PlanItem> batch = (items ?? Enumerable.Empty<PlanItem>())
                 .Where(delegate(PlanItem item) { return item != null && item.FileId > 0; })
@@ -982,11 +1020,12 @@ namespace MangaAuthorSorter
                             "INSERT OR REPLACE INTO MigrationPlanCache(" +
                             "FileId,ConfigKey,Author,MatchedAs,MatchWhy,TargetDir,TargetPath,Status,CanMove," +
                             "FileSize,LastWriteTime,RecognitionScore,RunnerUpScore,StatusCode,EvidenceKind," +
-                            "StatusArgument,CandidatePaths,CandidateNames,CandidatePlanned,UpdatedUtc) " +
-                            "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"))
+                            "StatusArgument,CandidatePaths,CandidateNames,CandidatePlanned,UpdatedUtc,ManualTargetDir,ManualTargetName,ManualTargetAuthor) " +
+                            "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)"))
                     {
                         foreach (PlanItem item in batch)
                         {
+                            if (cancelRequested != null && cancelRequested()) throw new OperationCanceledException();
                             statement.Bind(1, item.FileId); statement.Bind(2, (configKey ?? "") +
                                 (identityDependency == null ? "" : "|AuthorDependency=" + identityDependency(item.FileName)));
                             statement.Bind(3, item.Author ?? ""); statement.Bind(4, item.MatchedAs ?? "");
@@ -1004,6 +1043,9 @@ namespace MangaAuthorSorter
                             statement.Bind(19, String.Join(",", (item.CandidateIsPlanned ?? new List<bool>())
                                 .Select(delegate(bool value) { return value ? "1" : "0"; })));
                             statement.Bind(20, DateTime.UtcNow.ToString("o"));
+                            statement.Bind(21, item.ManualTargetDir ?? "");
+                            statement.Bind(22, item.ManualTargetName ?? "");
+                            statement.Bind(23, item.ManualTargetAuthor ?? "");
                             statement.StepDone();
                             statement.Reset();
                         }
@@ -1298,6 +1340,7 @@ namespace MangaAuthorSorter
         {
             lock (_gate)
             {
+                _disposed = true;
                 if (_db == IntPtr.Zero) return;
                 Native.sqlite3_close(_db);
                 _db = IntPtr.Zero;
@@ -1328,6 +1371,9 @@ namespace MangaAuthorSorter
                 "CREATE TABLE IF NOT EXISTS PendingChanges(ChangeId INTEGER PRIMARY KEY AUTOINCREMENT,ChangeKind TEXT NOT NULL,OldPath TEXT,NewPath TEXT,CreatedUtc TEXT NOT NULL);"
             );
             TryExecute("ALTER TABLE Roots ADD COLUMN IndexScopeKey TEXT NOT NULL DEFAULT '';");
+            TryExecute("ALTER TABLE MigrationPlanCache ADD COLUMN ManualTargetDir TEXT NOT NULL DEFAULT '';");
+            TryExecute("ALTER TABLE MigrationPlanCache ADD COLUMN ManualTargetName TEXT NOT NULL DEFAULT '';");
+            TryExecute("ALTER TABLE MigrationPlanCache ADD COLUMN ManualTargetAuthor TEXT NOT NULL DEFAULT '';");
             TryExecute("ALTER TABLE ParsedMetadata ADD COLUMN InputFingerprint TEXT NOT NULL DEFAULT '';");
             TryExecute("ALTER TABLE RecognitionCache ADD COLUMN InputFingerprint TEXT NOT NULL DEFAULT '';");
             TryExecute("ALTER TABLE RecognitionCache ADD COLUMN EvidenceKind TEXT NOT NULL DEFAULT '';");
@@ -1336,7 +1382,7 @@ namespace MangaAuthorSorter
             TryExecute("ALTER TABLE DestinationFolders ADD COLUMN GroupNumber INTEGER NOT NULL DEFAULT 0;");
             TryExecute("ALTER TABLE DestinationFolders ADD COLUMN LogicalAuthor TEXT NOT NULL DEFAULT '';");
             TryExecute("ALTER TABLE DestinationFolders ADD COLUMN IsGroup INTEGER NOT NULL DEFAULT 0;");
-            SetMetadata("SchemaVersion", "8");
+            SetMetadata("SchemaVersion", "9");
         }
 
         private void TryExecute(string sql)
@@ -1499,6 +1545,8 @@ namespace MangaAuthorSorter
             internal static extern void sqlite3_free(IntPtr pointer);
             [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
             internal static extern IntPtr sqlite3_errmsg(IntPtr db);
+            [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int sqlite3_errcode(IntPtr db);
             [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
             internal static extern int sqlite3_prepare_v2(IntPtr db, byte[] sql, int bytes, out IntPtr statement, IntPtr tail);
             [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
